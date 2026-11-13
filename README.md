@@ -30,12 +30,44 @@
 
 Instead of relying only on standard subtractive oscillators and filters, each of Adrift's **16 voices** sends an oscillator-and-noise **Exciter** into a tuned **1024-stage Bucket Brigade Device (BBD) delay loop** that resonates at the exact pitch of the note you play:
 
-```text
-[Morphing Oscillator + Pluck + Noise] ──> [Env 1 Contour] ──> [12 dB Resonant LPF] ──┬── (Dry Synth Path) ─────────────────────┐
-                                         (Delay + Loop)                              │                                         ▼
-                                                                                     └──> (+) ──> [Key-Tracked BBD] ──> [Dry / Wet] ──> [Env 2 Gate] ──> [Stereo FX Bus]
-                                                                                           ▲      (String / Pipe Body)                   (+ Drone)       (Chorus · Delay ·
-                                                                                           └──── [Invert · Dispersion · Feedback LPF] ◄──────┘           Shimmer · Comp)
+```mermaid
+%%{init: {
+  'theme': 'base',
+  'themeVariables': {
+    'darkMode': true,
+    'background': '#0b0d12',
+    'primaryColor': '#161b26',
+    'primaryTextColor': '#f1f5f9',
+    'primaryBorderColor': '#334155',
+    'lineColor': '#64748b',
+    'edgeLabelBackground': '#0b0d12',
+    'tertiaryTextColor': '#fef3c7',
+    'fontFamily': 'ui-sans-serif, system-ui, sans-serif'
+  }
+}}%%
+flowchart LR
+    classDef spark fill:#272012,stroke:#f59e0b,stroke-width:2px,color:#fef3c7
+    classDef resonator fill:#0f2622,stroke:#10b981,stroke-width:2px,color:#d1fae5
+    classDef motion fill:#11232e,stroke:#06b6d4,stroke-width:2px,color:#cffafe
+    classDef fx fill:#21162e,stroke:#8b5cf6,stroke-width:2px,color:#ede9fe
+    classDef junction fill:#1e293b,stroke:#94a3b8,stroke-width:2px,color:#f8fafc
+
+    Osc["Morphing Oscillator + Pluck + Noise"]:::spark --> Env1["Env 1 Contour<br/>(Delay + Loop)"]:::motion
+    Env1 --> LPF["12 dB Resonant LPF"]:::resonator
+    
+    LPF --> DryWet["Dry / Wet"]:::junction
+    LPF --> Sum(("+")):::junction
+    
+    Sum --> BBD["Key-Tracked BBD<br/>(String / Pipe Body)"]:::resonator
+    BBD --> DryWet
+    
+    BBD --> FB["Invert · Dispersion · Feedback LPF"]:::resonator
+    FB --> Sum
+    
+    DryWet --> Env2["Env 2 Gate<br/>(+ Drone)"]:::motion
+    Env2 --> FX["Stereo FX Bus<br/>(Chorus · Delay · Shimmer · Comp)"]:::fx
+
+    linkStyle default stroke:#64748b,stroke-width:2px
 ```
 
 1. **Exciter (`EXC`)** — Generates the raw energy that plucks, strikes, bows, or blows into the resonator: a continuously morphing analog waveform (**Sine → Triangle → Saw → Pulse** with PWM), a crisp **Pluck** transient with `-1 oct` sub-oscillator, white or stepped sample-and-hold noise, and warm **ACB Drift**.

@@ -195,7 +195,7 @@ a:hover {
   inline-size: 2rem;
   block-size: 2rem;
   border-radius: 0.5rem;
-  background: linear-gradient(135deg, var(--g1-gold), var(--g4-coral) 55%, var(--g6-violet));
+  background: linear-gradient(135deg, var(--g5-magenta), var(--g1-gold), var(--g2-emerald));
   color: #080C12;
   font-family: var(--font-mono);
   font-weight: 800;

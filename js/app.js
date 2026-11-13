@@ -341,7 +341,7 @@ const CONTROL_GUIDES = [
       { file: '16_mod_1_lfo1.png', tab: 'MOD 1/4 LFO 1', caption: 'Knobs 1–4: LFO 1 Waveform, Rate (0.05–30 Hz), Bipolar Depth, and Target Destination.' },
       { file: '17_mod_2_lfo2.png', tab: 'MOD 2/4 LFO 2', caption: 'Knobs 1–4: LFO 2 Waveform, Rate, Bipolar Depth, and Target Destination.' },
       { file: '18_mod_3_lfo3.png', tab: 'MOD 3/4 LFO 3', caption: 'Knobs 1–4: LFO 3 Waveform, Rate, Bipolar Depth, and Target Destination.' },
-      { file: '19_mod_4_mw.png', tab: 'MOD 4/4 Express', caption: 'Knobs 1–3: Mod Wheel Depth, Pitch-Bend Range (0–24 ST), and Legato Mode.' },
+      { file: '19_mod_4_mw.png', tab: 'MOD 4/4 Control', caption: 'Knobs 1–3: Mod Wheel Depth, Pitch-Bend Range (0–24 ST), and Legato Mode.' },
     ],
   },
   {

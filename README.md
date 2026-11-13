@@ -1,4 +1,4 @@
-# Adrift — 16-Voice BBD Resonator Synthesizer for M-VAVE FM-1
+# Adrift — 6-Part/16-Voice BBD Resonator Synthesizer for M-VAVE FM-1
 
 **Adrift** is custom synthesizer firmware that transforms the pocket-sized **M-VAVE FM-1** into a **16-voice polyphonic physical-modeling and virtual-analog instrument**. Built around key-tracked **Bucket Brigade Device (BBD) resonators**, morphing analog-style oscillators, **6 multi-timbral Voice Groups**, per-group arpeggiators, and a **4-stage stereo studio effects bus**, Adrift crafts acoustic guitars, bowed strings, hollow woodwinds, buzzing sitars, evolving granular clouds, and massive 16-voice unison leads.
 

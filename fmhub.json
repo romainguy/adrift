@@ -1,0 +1,9 @@
+{
+    "what": "Adrift transforms the pocket-sized M-VAVE FM-1 into a 16-voice, 6-part Bucket-Brigade Resonator synthesizer, capable of plucked guitars, bowed cellos, buzzing sitars, granular clouds, hands-free drones, and massive unison leads.",
+    "author": "Romain Guy",
+    "kinds": ["synth"],
+    "play": "https://romainguy.github.io/adrift/#play",
+    "cheat": "https://romainguy.github.io/adrift/#controls",
+    "image": "screenshots/20_grp_1_matrix_assign.png",
+    "color": "#F8BE30"
+}

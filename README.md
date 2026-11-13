@@ -1,20 +1,186 @@
-# Adrift - Custom Firmware for M-VAVE FM-1
+# Adrift — 16-Voice BBD Resonator Synthesizer for M-VAVE FM-1
 
-**Adrift** is a standalone 6-voice polyphonic bare-metal synthesizer firmware for the **M-VAVE FM-1** pocket synthesizer (`JieLi AC791N` dual-core `pi32v2` SoC), built on [`hugelton/felucca-bsp`](external/felucca-bsp) and verifiable without physical hardware via both a `<1s` native macOS `SDL2`+`CoreMIDI` simulator and [`joakimeriksson/fm1-emu`](external/fm1-emu).
+**Adrift** is custom synthesizer firmware that transforms the pocket-sized **M-VAVE FM-1** into a **16-voice polyphonic physical-modeling and virtual-analog instrument**. Built around key-tracked **Bucket Brigade Device (BBD) resonators**, morphing analog-style oscillators, **6 multi-timbral Voice Groups**, per-group arpeggiators, and a **4-stage stereo studio effects bus**, Adrift crafts acoustic guitars, bowed strings, hollow woodwinds, buzzing sitars, evolving granular clouds, and massive 16-voice unison leads.
 
-Adrift offers 16 voices, assignable across 6 multi-timbral voice groups. Each voice is a virtual
-analog morphing oscillator and a 1024-sgage Bucket Brigade Device resonator, with 2 envelopes
-(one post VCO, and one post resonator).
+**[Play Adrift Live in Your Browser & Flash Your FM-1](https://romainguy.github.io/adrift/)**
+
+- **Try Before Flashing**: Play all 24 factory presets directly on the **[Adrift Website](https://romainguy.github.io/adrift/)** using your mouse, touch screen, computer keyboard, or USB MIDI controller.
+- **One-Click USB Install**: Flash Adrift straight onto your M-VAVE FM-1 from Chrome, Edge, Brave, or Opera in ~15 seconds — no command line or drivers required.
+- **100% Reversible**: Restore the official M-VAVE factory firmware (`FM-1.fwsc`) at any time from the same browser installer.
+
+| Exciter (`EXC`) | BBD Resonator (`BBD`) | 16-Voice Soundstage (`HOME`) | Shimmer Reverb (`FX`) |
+| :---: | :---: | :---: | :---: |
+| <img src="screenshots/07_exc_1_wave.png" width="185" alt="Exciter Wave Screen"> | <img src="screenshots/12_bbd_1_filter_fb.png" width="185" alt="BBD Filter and Feedback Screen"> | <img src="screenshots/04_home_stage.png" width="185" alt="Home 2D Stereo Soundstage"> | <img src="screenshots/25_fx_2_shimmer_reverb.png" width="185" alt="Master Shimmer Reverb Screen"> |
 
 ---
 
-## Quick Start
+## Installing Adrift on Your M-VAVE FM-1
+
+1. Connect your **M-VAVE FM-1** to your computer (macOS, Windows, Linux) or Android device using a **USB data cable**, and switch the synth **ON**.
+2. Close any music software or DAW that might already be holding the FM-1's USB-MIDI port open.
+3. Open **[romainguy.github.io/adrift/#install](https://romainguy.github.io/adrift/#install)** in a WebMIDI-capable browser (**Google Chrome**, **Microsoft Edge**, **Brave**, or **Opera**).
+4. Click **Connect & Flash Adrift** and allow **MIDI SysEx** access when your browser asks.
+5. Keep the cable plugged in for ~15 seconds while the installer verifies the package, writes changed blocks, and restarts your FM-1 directly into Adrift.
+
+> **Want to switch back later?** Expand *Restore Official M-VAVE Factory Firmware* on the [Install section of the website](https://romainguy.github.io/adrift/#install) to flash the unmodified stock M-VAVE `FM-1.fwsc` package whenever you like.
+
+---
+
+## How Adrift Makes Sound
+
+Instead of relying only on standard subtractive oscillators and filters, each of Adrift's **16 voices** sends an oscillator-and-noise **Exciter** into a tuned **1024-stage Bucket Brigade Device (BBD) delay loop** that resonates at the exact pitch of the note you play:
+
+```text
+[Morphing Oscillator + Pluck + Noise] ──> [Env 1 Contour] ──> [12 dB Resonant LPF] ──┬── (Dry Synth Path) ─────────────────────┐
+                                         (Delay + Loop)                              │                                         ▼
+                                                                                     └──> (+) ──> [Key-Tracked BBD] ──> [Dry / Wet] ──> [Env 2 Gate] ──> [Stereo FX Bus]
+                                                                                           ▲      (String / Pipe Body)                   (+ Drone)       (Chorus · Delay ·
+                                                                                           └──── [Invert · Dispersion · Feedback LPF] ◄──────┘           Shimmer · Comp)
+```
+
+1. **Exciter (`EXC`)** — Generates the raw energy that plucks, strikes, bows, or blows into the resonator: a continuously morphing analog waveform (**Sine → Triangle → Saw → Pulse** with PWM), a crisp **Pluck** transient with `-1 oct` sub-oscillator, white or stepped sample-and-hold noise, and warm **ACB Drift**.
+2. **Exciter Contour (`ENV1`)** — Shapes what enters the resonator. Short snappy decays pluck strings and bars; slow attacks bow cellos and pads; **Onset Delay** (`0–2 s`) staggers multi-group chord strums; **Loop Mode** (`A-D` / `D-A-D`) creates self-repeating polyrhythms and granular textures while a key is held.
+3. **Input Filter & BBD Resonator (`BBD`)** — A 12 dB/oct resonant low-pass filter warms the exciter before it enters the key-tracked BBD loop. Raising **Feedback** turns short woody plucks into endlessly singing strings (and self-oscillates past `100%`), **Invert** flips loop phase for hollow clarinet/flute-like odd harmonics, and **Dispersion** adds bell, sitar, and metal bar stiffness.
+4. **Output Gate & Modulation (`ENV2` & `MOD`)** — **Envelope 2** sits *after* the resonator so it can cleanly silence runaway feedback on key release — or sustain forever with hands-free **Drone Hold**. **Three independent LFOs** per Voice Group plus Mod Wheel (`CC1`) animate pitch, wave morph, filter, feedback, stereo pan, and envelope times.
+5. **Master Stereo FX Bus (`FX`)** — All 16 voices flow through stereo **Dimension Chorus**, tempo-syncable **Ping-Pong Delay**, lush **Octave Shimmer Reverb**, and a punchy **Parallel Bus Compressor** with soft-knee limiting.
+
+---
+
+## Playing & Editing on the Hardware
+
+### Two Golden Rules
+
+- **Knobs `1`–`4` always match the 4 cards at the bottom of the screen.** Turn any of the four numbered knobs on the right to adjust the parameter directly in that column.
+- **Press an active screen button again to flip subpages.** Screens with more than four controls show a badge like `EXC 1/3` or `FX 2/3` — press the same button again to cycle through `1/3 → 2/3 → 3/3`.
+
+### Front-Panel Control Map
+
+Because Adrift repurposes the M-VAVE FM-1's physical panel for BBD physical modeling, several buttons take on new musical roles:
+
+| FM-1 Control | Adrift Role | What It Does |
+| :--- | :--- | :--- |
+| **Master Knob** | **Master Volume** | Controls overall headphone and line-out level. |
+| **`SELECT` Knob** | **Voice Group (`G1`–`G6`)** | Selects which of the 6 color-coded Voice Groups you are playing on the built-in keyboard and editing on screen. |
+| **`PRESETS` Knob** | **Preset Browser** | Scrolls with live audio preview through `INIT SYNTH`, `INIT GROUP`, Factory **`P1`–`P24`**, and User **`U1`–`U24`**. Press **`OCT+`** to keep or **`OCT-`** to cancel and restore your previous sound. |
+| **`ALGORITHM` Knob** | **Scale Browser** | Chooses from **16 musical scales** (`KNOB 1` sets root note `C`–`B`). In any non-chromatic scale, the white keys step cleanly through in-key notes so every run stays in key. |
+| **`KNOB 1`–`KNOB 4`** | **Screen Parameters 1–4** | Edits the 4 parameter cards shown along the bottom of the current screen. |
+| **`SCL` Button** | **`EXC` · Exciter (`1/3–3/3`)** | Waveform morph, PWM, VCO level, coarse/fine tune, wave/noise mix, S&H clock, Pluck + sub-osc, analog drift, and VCO keytracking. |
+| **`ENV` Button** | **`ENV1` · Exciter Env (`1/2–2/2`)** | Pre-resonator DADSR contour, Onset Delay (`0–2 s`), velocity sensitivity, `A-D` / `D-A-D` envelope looping, and time range (`SHORT` `250 ms` / `NORM` `5–10 s` / `LONG` `25 s`). |
+| **`LFO` Button** | **`BBD` · Resonator (`1/2–2/2`)** | Input filter cutoff & resonance, BBD feedback (`0–115%`), loop damping (`FB LPF`), hollow pipe polarity `Invert`, glide, dry/wet mix, and all-pass `Dispersion`. |
+| **`EDIT` Button** | **`ENV2` · Output Env (`1/2–2/2`)** | Post-resonator ADSR contour, onset delay, velocity sensitivity, and hands-free **Drone Hold**. |
+| **`GLO` Button** | **`MOD` · 3 LFOs & MW (`1/4–4/4`)** | Configures **LFO 1**, **LFO 2**, **LFO 3** (wave, rate, depth, and 22+ destinations), and Mod Wheel (`CC1`) depth. |
+| **`SEQ` Button** | **`GRP` · Voice Groups (`1/2–2/2`)** | Allocates the 16 hardware voices across **`G1`–`G6`**, sets voice mode (`POLY`, `UNISON`, `SUPER`), stereo spread, detune, MIDI channel (`CH 1`–`16`), pan, transpose, and level. |
+| **`ARP` Button** | **`ARP` · Arpeggiator (`1/2–2/2`)** | Per-group arpeggiator with 10 patterns, `1–4` octaves, BPM (or auto-locked external MIDI Clock), gate, velocity, **Latch**, **Swing**, and **Ratchet** repeats (`2X`–`4X`, random). |
+| **`FX` Button** | **`FX` · Master FX (`1/3–3/3`)** | Stereo Dimension Chorus, Ping-Pong Delay, Octave Shimmer Reverb, and Parallel Bus Compressor with live gain-reduction meter. |
+| **`HOME` Button** | **6 Live Visualizers (`1/6–6/6`)** | Cycles **Oscilloscope**, **Stereo Vectorscope**, **FFT Spectrum + Waterfall**, **16-Voice Stereo Soundstage**, **16-Voice Telemetry**, and **6-Group Performance Dashboard**. |
+| **`SAVE` Button** | **Save User Preset (`U1`–`U24`)** | Saves all 6 Voice Groups, Master FX, and a custom 12-character patch name to permanent flash memory (`OCT+` saves, `OCT-` cancels). |
+| **`PLAY` Button** | **Panic (All Sound Off)** | Immediately silences all held notes, drones, BBD feedback loops, and reverb/delay tails. |
+| **`OCT -` / `OCT +`** | **Octave / Cancel & Confirm** | Shifts the 27-key keyboard down or up by octaves — or acts as **Cancel (`OCT-`)** and **Confirm (`OCT+`)** inside the Preset, Scale, and Save screens. |
+
+---
+
+### Screen Tour
+
+#### Sound Shaping (`EXC`, `ENV1`, `BBD`, `ENV2`, `MOD`)
+
+| `EXC 2/3` · Pluck & Noise | `ENV1 2/2` · Delay & Loop | `BBD 2/2` · Invert & Dispersion | `MOD 1/4` · 3× LFO Overlay |
+| :---: | :---: | :---: | :---: |
+| <img src="screenshots/08_exc_2_noise_pluck.png" width="185" alt="Exciter Pluck and Noise"> | <img src="screenshots/11_env1_2_loop.png" width="185" alt="Envelope 1 Delay and Loop"> | <img src="screenshots/13_bbd_2_invert_disp.png" width="185" alt="BBD Invert and Dispersion"> | <img src="screenshots/16_mod_1_lfo1.png" width="185" alt="Modulation LFO 1"> |
+
+#### 6 Voice Groups, Arpeggiator & Studio FX (`GRP`, `ARP`, `FX`)
+
+Adrift's 16 voices are shared across **6 independent Voice Groups (`G1`–`G6`)**, each with its own signature OLED color (**Gold**, **Emerald**, **Cyan**, **Coral**, **Magenta**, **Violet**):
+- **Layer Sounds Together**: Assign multiple groups to **MIDI Channel 1** (for example, a plucked acoustic body on `G1` + a delayed octave shimmer on `G2`) so a single key press triggers an evolving multi-layered instrument.
+- **Multi-Timbral Splits & Sequencers**: Keep `G1`–`G6` on **MIDI Channels 1–6** to drive up to 6 distinct synth parts at once from an external sequencer or DAW.
+- **Massive Unison (`UNISON` & `SUPER`)**: Stack a group's voices onto every note with symmetrical stereo **Spread** and **Detune** — either with an independent BBD resonator per voice (`UNISON`) or all oscillators slammed into a single shared resonator (`SUPER`).
+
+| `GRP 1/2` · 6-Group Matrix | `ARP 1/2` · Pattern & Tempo | `FX 1/3` · Chorus & Delay | `FX 3/3` · Bus Compressor |
+| :---: | :---: | :---: | :---: |
+| <img src="screenshots/20_grp_1_matrix_assign.png" width="185" alt="Voice Group Allocation Matrix"> | <img src="screenshots/22_arp_1_pattern.png" width="185" alt="Arpeggiator Screen"> | <img src="screenshots/24_fx_1_chorus_delay.png" width="185" alt="Master Chorus and Delay"> | <img src="screenshots/26_fx_3_bus_compressor.png" width="185" alt="Master Bus Compressor"> |
+
+#### Presets, Scales, Saving & Live Visualizers (`PRESETS`, `SCALES`, `SAVE`, `HOME`)
+
+- **Single-Group Patch Import**: In the **Preset Browser** (`PRESETS` knob), turn **`KNOB 2` (`2:MD`)** from `FULL` to `GRP` and use **`KNOB 3` (`3:SR`)** to import *just one Voice Group* from any Factory or User preset into your current patch — great for mixing and matching layers!
+- **16 Performance Scales**: Turn **`ALGORITHM`** to lock the white keys to *Major*, *Natural Minor*, *Minor/Major Pentatonic*, *Blues*, *Dorian*, *Phrygian*, *Lydian*, *Mixolydian*, *Harmonic/Melodic Minor*, *Phrygian Dominant*, *Hirajoshi*, or *Whole Tone* in any root key (`KNOB 1`).
+
+| Preset Browser (`P1–24 · U1–24`) | 16-Scale Browser | Save User Preset (`U1–U24`) | `HOME` Spectrum & Waterfall |
+| :---: | :---: | :---: | :---: |
+| <img src="screenshots/27_presets_browser.png" width="185" alt="Presets Browser"> | <img src="screenshots/28_scales_browser.png" width="185" alt="Scales Browser"> | <img src="screenshots/29_preset_save.png" width="185" alt="Save User Preset Modal"> | <img src="screenshots/03_home_spec.png" width="185" alt="Spectrum and Waterfall Visualizer"> |
+
+---
+
+## 24 Factory Presets
+
+You can audition every factory preset right now in the **[Online Emulator](https://romainguy.github.io/adrift/#presets)**:
+
+| Slot | Name | Layout | Sound Character |
+| :--- | :--- | :--- | :--- |
+| **`P01`** | **Acoustic Guitar** | `3V · 1 Group` | Warm plucked nylon-and-steel guitar string with 13 free voices ready for extra layers. |
+| **`P02`** | **Bowed Cello Duo** | `14V · 2 Groups` | Expressive rosined cello body on `G1` paired with a delayed `+1 oct` wooden harmonic bloom on `G2`. |
+| **`P03`** | **Chord Strummer** | `16V · 4 Groups` | Press one key to strum a staggered 4-string acoustic chord (Root, 5th, Octave, and 12th). |
+| **`P04`** | **Auto Feedback** | `12V · 2 Groups` | Self-oscillating BBD loop singing on the edge of runaway analog feedback over a detuned sub-octave. |
+| **`P05`** | **Slowpad** | `16V · 2 Groups` | Wide PWM BBD string ensemble melting into Dimension Chorus, Ping-Pong Delay, and Shimmer Reverb. |
+| **`P06`** | **Melancholy Bath** | `14V · 2 Groups` | Tape-warbled felted keys shadowed by a delayed inverted-phase octave ghost halo. |
+| **`P07`** | **7 · 12 Glitter** | `16V · 3 Groups` | Crisp harp pluck followed by looping fifth (`+7 ST`) and octave (`+12 ST`) envelope sparkles. |
+| **`P08`** | **Mystery Pluck** | `14V · 2 Groups` | Stepped sample-and-hold modal bell pluck over a hollow inverted sub-octave pipe. |
+| **`P09`** | **Random Pluck** | `16V · 2 Groups` | Every note lands with a fresh wave shape and filter color via per-voice sample & hold. |
+| **`P10`** | **7th Overdub** | `16V · 3 Groups` | Warm electric tine keys that swell into a lush minor-7th chord as you hold notes down. |
+| **`P11`** | **Granular Cloud** | `16V · 4 Groups` | Four asynchronous looping-envelope grain streams weaving fifths and octaves over a warm pad. |
+| **`P12`** | **Into The Void** | `16V · 3 Groups` | Groaning iron resonators and hollow metal pipes anchored by a 4-voice unison sub bass. |
+| **`P13`** | **Pulsing Poly-Gate** | `14V · 2 Groups` | Interlocking polyrhythms driven by looping `A-D` and `D-A-D` exciter envelopes an octave apart. |
+| **`P14`** | **Hollow Flute** | `12V · 2 Groups` | Inverted-polarity cylindrical woodwind pipe with a breathy unison reed chiff on each attack. |
+| **`P15`** | **Sitar Jawari** | `16V · 3 Groups` | Dispersive buzzing Jawari bridge with delayed sympathetic fifth and high Chikari octave strings. |
+| **`P16`** | **Marimba Wood** | `14V · 2 Groups` | Hollow rosewood marimba bars kissed with a bright kalimba thumb-tine harmonic. |
+| **`P17`** | **Glass Bowls** | `16V · 2 Groups` | Singing Tibetan glass bowls wrapped in a crystalline octave shimmer tail. |
+| **`P18`** | **Clavinet Funk** | `12V · 2 Groups` | Snappy narrow-pulse funk clavinet with an upper-bridge key click for percussive riffs. |
+| **`P19`** | **Super Bass** | `12V · 2 Groups` | Eight detuned oscillators driven into a single shared BBD resonator (`SUPER`), topped with a tight pluck. |
+| **`P20`** | **16V Monster** | `16V · 1 Group` | All 16 hardware voices stacked into one massive stereo unison lead. |
+| **`P21`** | **BBD Chorus Poly** | `16V · 2 Groups` | Lush 8-voice polysynth blending dry analog-style oscillators with warm BBD ensemble chorus. |
+| **`P22`** | **Cathedral Pipe Organ** | `16V · 4 Groups` | Four-rank pipe organ stacking 16' Bourdon sub, 8' Principal, Nazard fifth, and 4' Clarion pipes. |
+| **`P23`** | **5 Drumkits** | `16V · 5 Groups` | Physical-modeling percussion playable together on `Ch 1` or split across `MIDI Ch 1–4` (Kick, Snare, Sub, Clap, Hat). |
+| **`P24`** | **Drone + Lead** | `16V · 4 Groups` | Expressive 8-voice bowed lead on `Ch 1` over hands-free `C3` & `G3` unison drones (`Ch 2–3`) and a pluck companion (`Ch 4`). |
+
+---
+
+## MIDI & External Gear Guide
+
+Adrift responds simultaneously to **USB-MIDI** and the **3.5mm TRS MIDI IN** jack (`31,250` baud), routing incoming notes and controllers by MIDI channel (`CH 1`–`CH 16`) to matching Voice Groups (`G1`–`G6`):
+
+- **Expressive Performance**: Velocity, 14-bit Pitch Bend, Aftertouch, Mod Wheel (`CC1`), Portamento (`CC5`), Group Volume (`CC7`), Sustain Pedal (`CC64`), Legato (`CC68`), Drone Hold (`CC69`), Unison Detune (`CC94`), All Sound Off (`CC120`), and All Notes Off (`CC123`).
+- **Preset Recall**: Send **Program Change `0`–`23`** for Factory `P1`–`P24` and **`24`–`47`** for User `U1`–`U24` (or use Bank Select `CC0 = 1` + Program Change `0`–`23` for `U1`–`U24`).
+- **Automatic MIDI Clock Sync (`24 PPQN`)**: Send MIDI Clock from your drum machine, groovebox, or DAW and Adrift automatically locks all 6 per-group Arpeggiators (`EXT` BPM, preserving Swing and `2X`/`3X`/`4X` Ratchets), resets to step 1 on MIDI `Start`, and switches Master Ping-Pong Delay time (`2:DLY TM`) into tempo-synced musical subdivisions (`1/32`, `1/16T`, `1/16`, `1/8T`, `1/16D`, `1/8`, `1/8D`, `1/4`). If clock stops, Adrift falls back to internal tempo after 2 seconds.
+
+<details>
+<summary><strong>Full MIDI CC Chart (Click to expand — or search interactively on the website)</strong></summary>
+
+<br>
+
+An interactive, searchable version of this table is available at **[romainguy.github.io/adrift/#midi](https://romainguy.github.io/adrift/#midi)**.
+
+| Section | MIDI CC Assignments |
+| :--- | :--- |
+| **Performance & Presets** | `CC0` Bank Select (`0` = Factory, `1` = User) · `CC1` Mod Wheel · `CC5` Glide Time · `CC7` Group Level · `CC64` Sustain Pedal · `CC68` Legato (`0–63` Retrig, `64–127` Legato) · `CC69` Drone Hold · `CC94` Unison Detune · `CC120` All Sound Off · `CC121` Reset Controllers · `CC123` All Notes Off |
+| **Exciter (`EXC`)** | `CC14`/`CC70` Wave Morph · `CC15` Pulse Width · `CC16` VCO Level · `CC17` Coarse Semi · `CC18` Fine Tune · `CC19` Wave/Noise Mix · `CC20` S&H Rate · `CC21` ACB Drift · `CC87` VCO Keytrack · `CC88` Pluck + Sub-Osc |
+| **Envelope 1 (`ENV1`)** | `CC22` Onset Delay · `CC23` Attack · `CC24` Decay · `CC25` Sustain · `CC26` Release · `CC27` Velocity Sens · `CC28` Loop Mode · `CC39` Time Range (`SHORT` / `NORM` / `LONG`) |
+| **Filter & Resonator (`BBD`)** | `CC74` Input LPF Cutoff · `CC71` Input Resonance · `CC75` BBD Feedback (`0–115%`) · `CC76` FB Damping LPF · `CC77` Polarity Invert · `CC78` Invert Pitch Comp · `CC79` Dry/Wet Mix · `CC89` All-Pass Dispersion |
+| **Envelope 2 (`ENV2`)** | `CC73` Attack · `CC80` Decay · `CC81` Sustain · `CC72` Release · `CC82` Velocity Sens · `CC69` Drone Hold |
+| **Modulation (`LFO 1–3`)** | **LFO 1**: `CC83` Wave, `CC84` Rate, `CC85` Depth, `CC86` Dest · **LFO 2**: `CC31` Wave, `CC32` Rate, `CC33` Depth, `CC34` Dest · **LFO 3**: `CC35` Wave, `CC36` Rate, `CC37` Depth, `CC38` Dest |
+| **Arpeggiator (`ARP`)** | `CC102` Algorithm (`0–10`) · `CC103` Octave Range (`1–4`) · `CC104` Rate (`40–240 BPM`) · `CC105` Gate · `CC106` Velocity (`0` = Key, `1–127` = Fixed) · `CC107` Latch · `CC108` Swing · `CC109` Ratchet (`0–7`) |
+| **Master Stereo FX (`FX`)** | `CC95`/`CC110` Chorus Mix · `CC111` Delay Time · `CC112` Delay Feedback · `CC113` Delay Mix · `CC114` Reverb Size · `CC115` Reverb Damping · `CC92`/`CC116` Octave Shimmer · `CC91`/`CC117` Reverb Mix · `CC118` Bus Comp Mix · `CC119` Comp Threshold · `CC29` Comp Attack · `CC30` Comp Makeup |
+
+</details>
+
+---
+
+## Developer Quick Start
+
+Adrift is a bare-metal dual-core C99 firmware for the M-VAVE FM-1's `JieLi AC791N` (`pi32v2`) SoC, built on [`hugelton/felucca-bsp`](external/felucca-bsp) with a `<1s` native macOS `SDL2` + `CoreMIDI` desktop simulator, cycle-accurate [`joakimeriksson/fm1-emu`](external/fm1-emu) verification, and a freestanding `clang` → `wasm32` WebAssembly build powering the [online emulator](https://romainguy.github.io/adrift/).
 
 ```sh
 # 1. One-time environment verification / setup (macOS Apple Silicon)
 ./tools/setup_env.sh
 
-# 2. Run automated verification suite
+# 2. Run automated DSP, MIDI, UI & User Preset verification suite
 ./build.sh test
 
 # 3. Build & launch fast-iteration native macOS SDL2 + CoreMIDI simulator (<1s build)
@@ -37,81 +203,6 @@ analog morphing oscillator and a 1024-sgage Bucket Brigade Device resonator, wit
 ./tools/deploy_gh_pages.sh
 ```
 
----
+## License
 
-## Per-Voice Signal Flow (`×16` Hardware Voices Across `G1..G6` Voice Groups)
-
-```text
-[Micro-ACB Morphing VCO] ──┐
-(Sine->Tri->Ramp->PWM)     ├──> [Env 1 VCA] ──> [12 dB/oct Input LPF] ──┬── (Dry) ───────────────────────────┐
-[White / S&H Noise] ───────┘         ▲          (32.7 Hz - 21 kHz)      │                                    ▼
-                                 [Env 1]                                └──> (+) ──> [1024-Stage BBD] ──> [Dry/Wet] ──> [Env 2 VCA] ──> Σ (16 Voices)
-                          (0-2s Delay + DADSR                                 ▲       (Key-Tracked)                      ▲                  │
-                           + Gate A-D Loop)                                   │             │                        [Env 2]                ▼
-                                                                              └── [Invert] ◄─ [FB VCA] ◄─ [6 dB FB LPF] (Post-BBD ADSR  [Master Stereo FX]
-                                                                                  (+/-1)     (0..115%)                  + Drone Hold)   (Chorus -> Delay ->
-                                                                                                                                         Shimmer Reverb ->
-                                                                                                                                         Bus Compressor)
-                                                                                                                                            │
-                                                                                                                                            ▼
-                                                                                                                                        [Master Soft-Knee
-                                                                                                                                         Limiter -> Out]
-```
-
-- **6 Multi-Timbral Voice Groups (`G1..G6`) Sharing 6 Hardware Voices**:
-  - Default preset allocation: **Group 1 (`G1`) = `3` voices** on **`MIDI Ch 1`** (`Round-Robin`), **Groups 2–6 (`G2..G6`) = `0` voices** (disabled, pre-assigned to `MIDI Ch 2..6`).
-  - Sound settings are stored **per group** so every voice inside a group shares a cohesive sound while multiple enabled groups play independent patches simultaneously on separate MIDI channels.
-  - Pressing **`SEQ`** toggles the **Group Settings sub-menu** (`GRP SETTINGS` + 6-column `G1..G6` allocation matrix), while pressing **`SAVE`** opens the **Save User Preset** modal (`U1..U24`, persistent across power cycles in NOR flash on FM-1 and `user_presets.bin` on SDL2):
-    - **`1:VOICES`**: `0` (`OFF`) to `16`, capped strictly to the group's current allocation plus remaining free voices (`USED:X/16 FREE:Y`) so voices are never stolen from other active groups.
-    - **`2:ASSIGN`**: `POLY` (polyphonic round-robin + oldest-voice stealing within the group), `UNISON` (all group voices stacked on each note, with detuning and spread, and one BBD stage per voice), or `SUPER` (like `UNISON`, but with a single BBD stage after stacking instead of one per voice).
-    - **`3:MIDI`**: `CH 1` .. `CH 16` per group (the built-in 27-key panel and SDL QWERTY keyboard automatically transmit on the selected group's MIDI channel).
-    - **`4:DETUNE`**: `0C` .. `50C` zero-mean symmetrical Unison pitch spread across both the Micro-ACB VCO and 1024-stage BBD resonator.
-    - **`5:MIDI`** (`CH 1..CH 16`)
-    - **`6:PAN`** (`L100..C..R100` per-group stereo pan)
-    - **`7:LEGATO`** (`RETRIG` / `LEGATO`)
-    - **`8:GRP LVL`** (`0..100%`).
-- **Dynamic Per-Group UI Color Themes (`HOME` Button)**: Cycles `G1 -> G2 -> G3 -> G4 -> G5 -> G6 -> G1` (**`G1` Electric Cyan**, **`G2` Lush Emerald**, **`G3` Warm Gold**, **`G4` Sunset Coral**, **`G5` Synthwave Magenta**, **`G6` Luminous Violet**), coloring header badges, tabs, oscilloscope/envelope curves, cards, and the 6 hardware voice-ownership pips.
-
----
-
-## Hardware Knobs, Buttons, Pages & SDL Controls
-
-Each parameter screen displays **4 parameters at a time** in a 1×4 row mapped directly to **`KNOB1`**, **`KNOB2`**, **`KNOB3`**, and **`KNOB4`**. Pressing a screen's button a second time cycles between **Page `1/2`** (parameters 1–4) and **Page `2/2`** (parameters 5–7, with the 4th cell left empty).
-
-| FM-1 Control | SDL Key / Action | Function |
-| :--- | :--- | :--- |
-| **`KNOB1`..`KNOB4`** | Top 4 Knobs | Edit the 4 parameters displayed on the current screen's active page |
-| **`SELECT` Knob** | `Tab` / `7` / Knob 5 / Click Badge | **Select Voice Group** (`G1`..`G6`) |
-| **`PRESETS` Knob** | `-` / `=` / Knob 6 / Click Preset Badge | **Presets Browser** — First turn snapshots current user settings and opens the Presets screen at the active preset; subsequent turns scroll & wrap through `INIT SYNTH`, `INIT GROUP`, Factory `P1`..`P24`, and User `U1`..`U24` with live audio preview. **`KNOB1` (`1:BK`)** filters `ALL` / `USER` / `FACT`, **`KNOB2` (`2:MD`)** selects `FULL` preset load or `GRP` single-group patch import (with **`KNOB3` (`3:SR`)** choosing source `G1`..`G6` into the active group), and **`KNOB4` (`4:CL`)** arms two-step clear on occupied User slots |
-| **`ALGORITHM` Knob** | `;` / `'` / Knob 7 | **Scale Browser** — First turn opens the Scales screen highlighting the active scale (default `CHROMATIC`); subsequent turns scroll & wrap through 16 musical scales (`CHROMATIC`, `MAJOR`, `NAT MINOR`, `MIN PENTA`, `MAJ PENTA`, `BLUES`, `DORIAN`, `PHRYGIAN`, `LYDIAN`, `MIXOLYDIAN`, `LOCRIAN`, `HARM MINOR`, `MEL MINOR`, `PHRYG DOM`, `HIRAJOSHI`, `WHOLE TONE`) with live white-key mapping preview, while **`KNOB1`** selects the root note (`C`..`B`, default `C`). In non-chromatic scales, white keys step sequentially through scale degrees and black keys are muted |
-| **`SEL` (`SCL`)** | `1` | **`EXC` Screen (3 Subpages)** — Page 1/3: Morph, PWM, VCO Level (`0..100%` overall exciter wave+noise level), Semi; Page 2/3: Fine, Mix (`0..100%` Wave/Noise mix: `0%` = wave only, `100%` = noise only), S&H Clock, Pluck (`0..100%` Note-On Phase Lock + Pick/Mallet Impulse + `-1 Oct` Sub-Osc); Page 3/3: ACB Drift (`0..100%`), VCO Keytrack (`TRACK` / `FIXED`) |
-| **`ENV`** | `2` | **`ENV1` Screen** — Interactive DADSR / Loop graph + Page 1/2: Attack, Decay, Sustain, Release; Page 2/2: Delay, Vel Sens, Loop, Range (`SHORT` `0–250 ms`, `NORM` `5 s / 10 s`, `LONG` `up to 25 s` per stage) |
-| **`LFO`** | `3` | **`BBD` Screen** — Interactive Resonator graph + Page 1/2: Input LPF, Input Res, Feedback, FB LPF; Page 2/2: Invert, Glide, Dry/Wet, Dispersion (`0..100%` Loop All-Pass Stiffness / Inharmonicity) |
-| **`EDIT`** | `4` | **`ENV2` Screen** — Interactive DADSR / Drone graph + Page 1/2: Attack, Decay, Sustain, Release; Page 2/2: Delay, Vel Sens, Drone |
-| **`GLO`** | `5` | **`MOD` Screen (4 Subpages)** — Interactive Multi-LFO 1..3 overlay graph + Page 1/4 (`LFO 1`): Wave, Rate, Depth, Dest; Page 2/4 (`LFO 2`): Wave, Rate, Depth, Dest; Page 3/4 (`LFO 3`): Wave, Rate, Depth, Dest (`VCO PT`, `MORPH`, `PWM`, `IN LPF`, `BBD PT`, `FB LPF`, `FB AMT`, `ALL PT`, `PAN`, `SPREAD`, `DRYWET`, `VCA`, `EX MIX`, `EX LVL`, `SH CLK`, `IN RES`, `DISPR`, `E1 ATK`, `E1 DEC`, `E1 SUS`, `E1 REL`, `E1 DLY`, plus `L1 RT` on `LFO 2` & `LFO 3`); Page 4/4 (`MW`): MW Depth |
-| **`SAVE`** | `8` / `\` / `Cmd+S` / `Ctrl+S` / Right-Click Preset Badge | **`SAVE PRESET` Modal (`U1`..`U24`)** — Saves all 6 Voice Groups + Master Stereo FX + 12-char name to persistent NOR flash (`0x0C0000..0x0D9000` with atomic backup sector) / `user_presets.bin`. **`KNOB1`** selects slot `U1..U24`, **`KNOB2`** moves the 12-cell cursor, **`KNOB3`** edits the active character, **`KNOB4`** clears/resets (or type directly on QWERTY in SDL2); **`OCT+` (`Enter`)** commits, **`OCT-` (`Esc`)** cancels |
-| **`SEQ`** | `0` / `` ` `` / `Enter` / Right-Click Group Badge | **`GRP` (Group) Screen** — 6-column `G1..G6` matrix + Page 1/2: Voices, Assign, Spread, Detune; Page 2/2: MIDI Ch, Pan (`L100..C..R100`), Transpose, Group Level |
-| **`ARP`** | `9` / `A` | **`ARP` (Arpeggiator) Screen** — 8-step Arpeggio visualizer + Page 1/2: Algo, Range (`1..4 OCT`), Rate (`40..240 BPM` internal, or auto-locked `EXT` + BPM under external `24 PPQN` MIDI Clock), Gate (`5..100%`); Page 2/2: Velocity (`KEY` / `1..127`), Latch (`OFF` / `ON`), Swing (`0..100%`), Ratchet (`1X`, `2X`, `3X`, `4X`, `1-2X`, `1-3X`, `1-4X`, `RND`) |
-| **`FX`** | `F` / `/` | **`FX` (Master Stereo FX) Screen (3 Subpages)** — Stereo Chorus/Delay/Reverb + Soft-Knee Bus Compressor & GR visualizer — Page 1/3: Chorus Mix (`0..100%`), Delay Time (`20..360 ms` internal, or tempo-synced `1/32`, `1/16T`, `1/16`, `1/8T`, `1/16D`, `1/8`, `1/8D`, `1/4` under external MIDI Clock), Delay Feedback (`0..92%`), Delay Mix (`0..100%`); Page 2/3: Reverb Size (`0..100%`), Reverb Damping (`0..100%`), Octave Shimmer (`0..100%`), Reverb Mix (`0..100%`); Page 3/3: Bus Comp Mix (`0..100%` parallel dry/wet glue), Threshold (`-24..-2 dB`), Attack (`1..50 ms` with `~110 Hz` sidechain HPF & program-dependent release), Makeup (`+0..+12 dB`) |
-| **`HOME`** | `6` / Click Badge | **`HOME` Visualizers (6 Pages)** — Cycles `1/6 SCOPE` (Oscilloscope: `MONO`/`DUAL`/`FILL`), `2/6 VECT` (Stereo Vectorscope / Lissajous Goniometer + Correlation & L/R Meters: `GONI`/`X-Y`/`DOTS`), `3/6 SPEC` (64-pt FFT Spectrum Analyzer + 24-Row Waterfall: `SPLT`/`BARS`/`WTRF`), `4/6 STAGE` (2D Stereo Soundstage & 16-Voice Pitch/Pan/BBD Constellation: `FLD`/`VEC`/`HRM`), `5/6 POLY` (16-Voice Telemetry Bridge: `TRI`/`BBD`/`ENV`), and `6/6 PERF` (6-Group Performance & Arp Dashboard + Master FX Meters: `DASH`/`ARP`/`MIX`). On all `HOME` pages, **`KNOB1`..`KNOB4`** control **`1:ZOOM`** (`1X..8X`), **`2:GAIN`** (`25%..400%`), **`3:FREEZE`** (`RUN`/`HOLD`), and **`4:MODE`** |
-| **`PLAY`** | `Space` / `Backspace` | **Panic** — All Notes Off + immediate BBD resonator & Master FX tail flush |
-| **`OCT-` / `OCT+`** | `[` / `]` | Keyboard Octave Down / Up (or **Cancel & Restore** / **Confirm Selection** when in the Presets Browser, Save Preset Modal, or Scale Browser screen) |
-| **`REC`** | — | Unused (inactive, LED off) |
-
----
-
-## MIDI Implementation
-
-Reacts to both **USB-MIDI** and **3.5mm TRS MIDI IN** (`31,250` baud), routed per MIDI channel (`CH 1..16`) to matching Voice Groups (`G1..G6`):
-- **Note On / Note Off** with Velocity (Round-Robin or Unison within each matching group), **14-bit Pitch Bend**, **Channel / Poly Pressure**, **Bank Select MSB (`CC0`: `0` = Factory `P1..P24`, `1` = User `U1..U24`)**, **Program Change (`0..23` Factory / `24..47` User in Bank 0, `0..23` User in Bank 1; empty User slots ignored cleanly)**, **Mod Wheel (`CC1`)**, **Portamento (`CC5`)**, **Group Volume (`CC7`)**, **Sustain Pedal (`CC64`)**, **Legato (`CC68`)**, **Drone Hold (`CC69`)**, **Unison Detune (`CC94`)**, **All Sound Off (`CC120`)**, **Reset All Controllers (`CC121`)**, **All Notes Off (`CC123`)**.
-- **Per-Group Sound CCs**:
-  - Exciter: `CC14`/`CC70` Morph, `CC15` PWM, `CC16` VCO Level (overall exciter level), `CC17` Semi, `CC18` Fine, `CC19` Wave/Noise Mix, `CC20` S&H Rate, `CC21` ACB Drift, `CC87` VCO Keytrack, `CC88` Pluck / Sub-Osc.
-  - Env 1: `CC22` Onset Delay, `CC23` Attack, `CC24` Decay, `CC25` Sustain, `CC26` Release, `CC27` Vel Sens, `CC28` Loop Mode, `CC39` Env 1 Range (`SHORT` / `NORM` / `LONG`).
-  - Filters & BBD: `CC74` Input LPF Cutoff, `CC71` Input Resonance, `CC75` BBD Feedback (`0-115%`), `CC76` 6 dB FB LPF Cutoff, `CC77` Polarity Invert, `CC78` Invert Pitch Comp, `CC79` Dry/Wet Mix, `CC89` Loop All-Pass Dispersion.
-  - Post-BBD Env 2 & LFOs 1..3: `CC73` Env 2 Attack, `CC80` Env 2 Decay, `CC81` Env 2 Sustain, `CC72` Env 2 Release, `CC82` Env 2 Vel Sens, `CC69` Drone Hold, `CC83` LFO 1 Wave, `CC84` LFO 1 Rate, `CC85` LFO 1 Depth, `CC86` LFO 1 Dest, `CC31` LFO 2 Wave, `CC32` LFO 2 Rate, `CC33` LFO 2 Depth, `CC34` LFO 2 Dest, `CC35` LFO 3 Wave, `CC36` LFO 3 Rate, `CC37` LFO 3 Depth, `CC38` LFO 3 Dest.
-  - Arpeggiator: `CC102` Algorithm (`0..10`), `CC103` Range (`1..4` octaves), `CC104` Rate (`40..240` BPM), `CC105` Gate (`5..100%`), `CC106` Velocity (`0` = Key, `1..127` = fixed), `CC107` Latch (`0..63` Off, `64..127` On), `CC108` Swing (`0..100%`), `CC109` Ratchet (`0..7`).
-  - Master Stereo FX: `CC95`/`CC110` Chorus Mix, `CC111` Delay Time, `CC112` Delay Feedback, `CC113` Delay Mix, `CC114` Reverb Size, `CC115` Reverb Damping, `CC92`/`CC116` Reverb Shimmer, `CC91`/`CC117` Reverb Mix, `CC118` Bus Comp Mix, `CC119` Bus Comp Threshold, `CC29` Bus Comp Attack, `CC30` Bus Comp Makeup.
-- **External MIDI Clock Sync (`24 PPQN` System Real-Time)**:
-  - Automatically locks to incoming `0xF8` Timing Clock (`30..300 BPM`) across USB-MIDI, 3.5mm TRS MIDI IN, and CoreMIDI without disturbing running status, with a 2-second watchdog fallback to internal tempo when clock stops.
-  - Handles `0xFA` (`Start`, resets all active Arpeggiators to step 1 on the downbeat), `0xFB` (`Continue`), and `0xFC` (`Stop`).
-  - Phase-locks all 6 per-group Arpeggiators to `1/16`th steps (`6` pulses per step) while preserving sub-step Swing and Ratchet (`2X`/`3X`/`4X`) timing, and tempo-syncs Master Stereo Ping-Pong Delay (`2:DLY TM`) to 8 musical subdivisions (`1/32`, `1/16T`, `1/16`, `1/8T`, `1/16D`, `1/8`, `1/8D`, `1/4`).
+MPL-2.0, see [LICENSE](./LICENSE).

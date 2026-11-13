@@ -29,6 +29,12 @@ analog morphing oscillator and a 1024-sgage Bucket Brigade Device resonator, wit
 
 # 6. Run strict cycle-accurate 16-voice multi-group pi32v2 CPU & audio verification benchmark
 ./build.sh bench
+
+# 7. Build static website, WebAssembly emulator & browser flasher bundle (build/web/)
+./build.sh web
+
+# 8. Build and publish the website to the gh-pages branch
+./tools/deploy_gh_pages.sh
 ```
 
 ---

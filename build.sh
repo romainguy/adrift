@@ -7,6 +7,7 @@
 #   ./build.sh sdl         Compile native macOS SDL2 + CoreMIDI fast-iteration simulator (<1s)
 #   ./build.sh screenshots Render PNG screenshots of all UI screens into screenshots/
 #   ./build.sh fw          Compile flashable hardware firmware package (build/fw/adrift.fwsc)
+#   ./build.sh web         Build static website, WASM synth emulator & firmware installer (build/web/)
 #   ./build.sh emu         Launch fm1-live running build/fw/adrift.fwsc with live audio & MIDI
 #   ./build.sh bench       Run strict 240 MHz & 360 MHz pi32v2 cycle-accurate CPU benchmark
 #   ./build.sh all         Build test + sdl + fw
@@ -290,6 +291,119 @@ build_fw() {
     echo "  [fwsc]   Ready: $OUT/adrift.fwsc"
 }
 
+build_web() {
+    REBUILD_FW=0
+    for arg in "$@"; do
+        case "$arg" in
+            --rebuild-fw) REBUILD_FW=1 ;;
+        esac
+    done
+
+    echo "==> Building Adrift website & WebAssembly emulator (build/web/)..."
+
+    # Resolve wasm32-capable clang and wasm-ld
+    if [ -n "${WASM_CC:-}" ]; then
+        WCC="$WASM_CC"
+    elif [ -x "/opt/homebrew/opt/llvm/bin/clang" ]; then
+        WCC="/opt/homebrew/opt/llvm/bin/clang"
+    elif [ -x "/usr/local/opt/llvm/bin/clang" ]; then
+        WCC="/usr/local/opt/llvm/bin/clang"
+    else
+        WCC="clang"
+    fi
+
+    if [ -n "${WASM_LD:-}" ]; then
+        WLD="$WASM_LD"
+    elif [ -x "/opt/homebrew/opt/lld/bin/wasm-ld" ]; then
+        WLD="/opt/homebrew/opt/lld/bin/wasm-ld"
+    elif [ -x "/usr/local/opt/lld/bin/wasm-ld" ]; then
+        WLD="/usr/local/opt/lld/bin/wasm-ld"
+    elif command -v wasm-ld >/dev/null 2>&1; then
+        WLD="$(command -v wasm-ld)"
+    else
+        echo "ERROR: wasm-ld not found. Install via 'brew install llvm lld' or run ./tools/setup_env.sh." >&2
+        exit 1
+    fi
+
+    OUT="$ROOT/build/web"
+    OBJ_DIR="$ROOT/build/web_obj"
+    rm -rf "$OUT"
+    mkdir -p "$OUT/assets/screens" "$OBJ_DIR"
+
+    NEWEST_HDR="$(ls -t "$ROOT"/src/*.h "$ROOT"/src/*/*.h 2>/dev/null | head -n 1)"
+    WASM_FLAGS="--target=wasm32 -std=c99 -O2 -nostdlib -fno-builtin -fvisibility=hidden -Wall -Wextra -Werror -Wno-unused-parameter -I$ROOT/src"
+    OBJS=""
+    PIDS=""
+
+    for m in $CORE_MODULES platform/platform_web; do
+        src="$ROOT/src/${m}.c"
+        obj="$OBJ_DIR/$(echo "$m" | tr '/' '_').o"
+        OBJS="$OBJS $obj"
+        if need_host_build "$src" "$obj"; then
+            "$WCC" $WASM_FLAGS -c "$src" -o "$obj" &
+            PIDS="$PIDS $!"
+        fi
+    done
+
+    for pid in $PIDS; do
+        wait "$pid"
+    done
+
+    "$WLD" --no-entry --export-dynamic --strip-all \
+        --initial-memory=2097152 -z stack-size=131072 \
+        $OBJS -o "$OUT/adrift.wasm"
+    echo "  [wasm]   Built $OUT/adrift.wasm"
+
+    # Ensure UI screenshots are generated and copy into web assets
+    if [ "$REBUILD_FW" -eq 1 ] || [ ! -f "$ROOT/screenshots/01_home_scope.png" ] || [ ! -f "$ROOT/screenshots/29_preset_save.png" ]; then
+        build_screenshots
+    fi
+    cp "$ROOT"/screenshots/*.png "$OUT/assets/screens/"
+
+    # Ensure hardware firmware package exists and copy into web root for WebMIDI flashing & download
+    if [ "$REBUILD_FW" -eq 1 ] || [ ! -f "$ROOT/build/fw/adrift.fwsc" ]; then
+        build_fw
+    fi
+    cp "$ROOT/build/fw/adrift.fwsc" "$OUT/adrift.fwsc"
+
+    # Copy static website files
+    if [ -d "$ROOT/web" ]; then
+        cp -R "$ROOT/web/." "$OUT/"
+    fi
+    : > "$OUT/.nojekyll"
+
+    # Generate version & integrity metadata for UI display and flasher verification
+    python3 - "$ROOT" "$OUT/adrift.fwsc" "$OUT/version.json" <<'PY'
+import datetime, hashlib, json, os, subprocess, sys
+
+root, fw_path, out_json = sys.argv[1], sys.argv[2], sys.argv[3]
+data = open(fw_path, "rb").read()
+sha256 = hashlib.sha256(data).hexdigest()
+
+try:
+    commit = subprocess.check_output(
+        ["git", "-C", root, "rev-parse", "--short", "HEAD"],
+        stderr=subprocess.DEVNULL, text=True
+    ).strip()
+except Exception:
+    commit = "unknown"
+
+meta = {
+    "name": "Adrift",
+    "product": "FM-1_462",
+    "commit": commit,
+    "built_at": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    "fwsc_file": "adrift.fwsc",
+    "fwsc_bytes": len(data),
+    "fwsc_sha256": sha256,
+}
+with open(out_json, "w", encoding="utf-8") as f:
+    json.dump(meta, f, indent=2)
+    f.write("\n")
+PY
+    echo "  [web]    Ready: $OUT/"
+}
+
 run_emu() {
     [ -f "$ROOT/build/fw/adrift.fwsc" ] || build_fw
     exec "$EMU_BIN" --fwsc "$ROOT/build/fw/adrift.fwsc" "$@"
@@ -313,6 +427,7 @@ case "$CMD" in
     sdl)         build_sdl ;;
     screenshots) build_screenshots "$@" ;;
     fw)          build_fw ;;
+    web)         build_web "$@" ;;
     emu)         run_emu "$@" ;;
     bench)       run_bench ;;
     all)
@@ -321,7 +436,7 @@ case "$CMD" in
         build_fw
         ;;
     *)
-        echo "Usage: $0 {test|sdl|screenshots|fw|emu|bench|all}" >&2
+        echo "Usage: $0 {test|sdl|screenshots|fw|web|emu|bench|all}" >&2
         exit 1
         ;;
 esac

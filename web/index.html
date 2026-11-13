@@ -1,0 +1,531 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Adrift — 16-Voice BBD Resonator Synthesizer for M-VAVE FM-1</title>
+  <meta name="description" content="Play Adrift live in your browser or flash it onto your M-VAVE FM-1 in seconds. A 16-voice, 6-part BBD physical-modeling & lush stereo synthesizer firmware.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%230B0E15'/%3E%3Cpath d='M10 36 Q20 12 30 34 T54 28' fill='none' stroke='%23F8BE30' stroke-width='6' stroke-linecap='round'/%3E%3Ccircle cx='50' cy='28' r='5' fill='%2338D8F8'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="./css/style.css">
+</head>
+<body>
+  <a class="skip-link visually-hidden" href="#main-title">Skip to main content</a>
+
+  <header class="site-header">
+    <div class="container nav-inner">
+      <a class="brand" href="#play">
+        <span class="brand-mark" aria-hidden="true">A</span>
+        <span class="brand-text">
+          <span class="brand-name">ADRIFT</span>
+          <span class="brand-sub">for M-VAVE FM-1</span>
+        </span>
+      </a>
+
+      <nav aria-label="Primary sections">
+        <ul class="nav-links">
+          <li><a href="#play">Play</a></li>
+          <li><a href="#install">Install</a></li>
+          <li><a href="#sound">How It Sounds</a></li>
+          <li><a href="#controls">Controls &amp; Screens</a></li>
+          <li><a href="#presets">24 Presets</a></li>
+          <li><a href="#midi">MIDI Guide</a></li>
+        </ul>
+      </nav>
+
+      <div class="nav-actions">
+        <a class="btn btn-primary" href="#install">Flash to FM-1</a>
+        <a class="btn btn-ghost" href="https://github.com/romainguy/adrift" target="_blank" rel="noopener noreferrer">GitHub</a>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <!-- 1. HERO + LIVE IN-BROWSER M-VAVE FM-1 EMULATOR -->
+    <section id="play" class="hero-section">
+      <div class="container">
+        <div class="hero-intro">
+          <div>
+            <span class="eyebrow">Custom Instrument Firmware · Free &amp; Open Source</span>
+            <h1 id="main-title" tabindex="-1">Acoustic Strings, Singing BBD Pipes &amp; Lush Stereo Pads on Your M-VAVE FM-1.</h1>
+            <p class="hero-lead">
+              <strong>Adrift</strong> transforms the pocket-sized M-VAVE FM-1 into a 16-voice, 6-part Bucket-Brigade Resonator synthesizer — capable of plucked guitars, bowed cellos, buzzing sitars, granular clouds, hands-free drones, and massive unison leads. Play the real firmware below, or install it straight from your browser.
+            </p>
+          </div>
+          <div class="hero-cta-box">
+            <a class="btn btn-primary" href="#install">Install on My FM-1</a>
+            <a class="btn btn-secondary" href="#presets">Explore 24 Presets</a>
+          </div>
+        </div>
+
+        <div class="emu-shell" aria-label="Interactive M-VAVE FM-1 synthesizer">
+          <div class="emu-topbar">
+            <div id="emu-live-readout" class="emu-readout" role="status" aria-live="polite">
+              P01 Acoustic Guitar · Editing G1 · Standby — click any key to play
+            </div>
+            <div class="emu-toolbar-group">
+              <button type="button" id="btn-open-shortcuts" class="btn btn-ghost">
+                Keyboard &amp; Touch Guide
+              </button>
+            </div>
+          </div>
+
+          <div id="hero-quick-presets" class="quick-presets-strip" role="group" aria-label="Featured presets"></div>
+
+          <div class="canvas-frame">
+            <canvas
+              id="fm1-canvas"
+              width="1280"
+              height="800"
+              tabindex="0"
+              aria-label="Interactive M-VAVE FM-1 front panel: click or touch the 27 keys at the bottom to play notes, drag knobs up and down to shape the sound, or press panel buttons to switch OLED screens."
+            ></canvas>
+          </div>
+
+          <div class="emu-toolbar">
+            <div class="emu-toolbar-group">
+              <button type="button" id="btn-audio-toggle" class="btn btn-accent" data-state="idle">
+                Start Synth Audio
+              </button>
+              <button type="button" id="btn-panic" class="btn btn-secondary" title="Silence all ringing voices and feedback">
+                Panic (All Notes Off)
+              </button>
+              <label class="toggle-label">
+                <input type="checkbox" id="chk-qwerty" checked>
+                <span>Show <kbd>Z</kbd>–<kbd>M</kbd> Key Labels</span>
+              </label>
+            </div>
+
+            <div class="emu-toolbar-group">
+              <label for="midi-input-select" class="visually-hidden">MIDI Keyboard Input</label>
+              <select id="midi-input-select" title="Play Adrift from an external USB-MIDI keyboard">
+                <option value="all">MIDI Keyboard: Auto</option>
+              </select>
+              <button type="button" id="btn-midi-connect" class="btn btn-ghost">
+                Scan MIDI
+              </button>
+            </div>
+          </div>
+
+          <div class="user-bank-bar">
+            <div class="user-bank-meta">
+              <strong>User Presets (U1–U24):</strong>
+              <span id="user-preset-count" class="user-bank-count">0/24 saved in browser</span>
+              <span>— Press <strong>SAVE</strong> on the panel to store your own patches automatically.</span>
+            </div>
+            <div class="emu-toolbar-group">
+              <button type="button" id="btn-export-presets" class="btn btn-ghost">Export Backup (.bin)</button>
+              <label class="btn btn-ghost file-btn-label">
+                <span>Import Backup</span>
+                <input type="file" id="file-import-presets" accept=".bin,application/octet-stream">
+              </label>
+              <button type="button" id="btn-reset-presets" class="btn btn-ghost">Clear All</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 2. DIRECT BROWSER WEBMIDI FIRMWARE INSTALLER -->
+    <section id="install">
+      <div class="container">
+        <div class="section-header">
+          <span class="eyebrow">One-Click USB Update</span>
+          <h2>Flash Adrift Straight from Your Browser</h2>
+          <p>
+            No command line, drivers, or desktop updater software needed. Plug your M-VAVE FM-1 in via USB, click flash, and start making music in under half a minute. And if you ever want the original M-VAVE FM synth back, you can restore it right here too.
+          </p>
+        </div>
+
+        <div class="install-grid">
+          <div class="steps-card">
+            <h3>Before You Click Flash</h3>
+            <ol class="step-list" role="list">
+              <li>
+                <span class="step-num" aria-hidden="true">1</span>
+                <div>
+                  <strong>Use a USB data cable &amp; switch your FM-1 ON</strong>
+                  <p>Connect the FM-1 directly to your computer’s USB port (normal playing mode — no button combos required) and make sure it has battery charge.</p>
+                </div>
+              </li>
+              <li>
+                <span class="step-num" aria-hidden="true">2</span>
+                <div>
+                  <strong>Open in Chrome, Edge, Brave, or Opera</strong>
+                  <p>When prompted by your browser, allow <strong>MIDI &amp; System Exclusive (SysEx)</strong> access so this page can talk to your synth. Close any DAW that may be locking MIDI ports.</p>
+                </div>
+              </li>
+              <li>
+                <span class="step-num" aria-hidden="true">3</span>
+                <div>
+                  <strong>Click “Connect &amp; Flash Adrift” and keep it plugged in</strong>
+                  <p>Your FM-1 will briefly switch into update mode, write only the blocks that changed, and automatically restart into Adrift.</p>
+                </div>
+              </li>
+            </ol>
+          </div>
+
+          <div class="flasher-card">
+            <div id="flash-support-pill" class="support-pill" data-status="ok">
+              Checking WebMIDI support…
+            </div>
+
+            <div class="flasher-port-row">
+              <label for="flash-port-select" class="visually-hidden">Target FM-1 MIDI Port</label>
+              <select id="flash-port-select">
+                <option value="">Auto-detect M-VAVE FM-1 (Recommended)</option>
+              </select>
+              <button type="button" id="btn-check-device" class="btn btn-secondary">
+                Inspect Connected FM-1
+              </button>
+            </div>
+
+            <div class="flasher-cta-row">
+              <button type="button" id="btn-flash-adrift" class="btn btn-primary">
+                Connect &amp; Flash Adrift
+              </button>
+              <a class="btn btn-secondary" href="./adrift.fwsc" download="adrift.fwsc">
+                Download adrift.fwsc
+              </a>
+            </div>
+
+            <p id="fw-version-meta" class="fw-meta-note">Latest Firmware Package · adrift.fwsc</p>
+
+            <div class="flash-console" role="region" aria-label="Firmware update status" aria-live="polite">
+              <div id="flash-status-headline" class="flash-headline" data-state="idle">
+                Ready to connect to your M-VAVE FM-1.
+              </div>
+              <div id="flash-progress-wrap" class="flash-progress-wrap" hidden>
+                <progress id="flash-progress-bar" max="100" value="0"></progress>
+              </div>
+              <ul id="flash-status-log" class="flash-log" role="list"></ul>
+            </div>
+
+            <div class="disclosure-stack">
+              <details class="accordion">
+                <summary>Restore Official M-VAVE Factory Firmware (or Flash Custom .fwsc)</summary>
+                <div class="accordion-body">
+                  <p>
+                    Adrift is completely reversible. To return to the factory M-VAVE FM synth, select your official <code>FM-1.fwsc</code> (V15) update file below and click <strong>Flash Selected File</strong>.
+                  </p>
+                  <div class="custom-fw-row">
+                    <input type="file" id="file-custom-fwsc" accept=".fwsc">
+                    <button type="button" id="btn-flash-custom" class="btn btn-secondary" disabled>
+                      Flash Selected File
+                    </button>
+                  </div>
+                </div>
+              </details>
+
+              <details class="accordion">
+                <summary>Troubleshooting &amp; Interrupted Updates</summary>
+                <div class="accordion-body">
+                  <p>
+                    <strong>“FM-1 not found”?</strong> Double-check that your USB cable carries data (many charging cables only connect power wires) and quit Ableton Live, Logic, or MIDI utilities on Windows that take exclusive control of USB-MIDI ports.
+                  </p>
+                  <p style="margin-block-end:0">
+                    <strong>Cable unplugged mid-update?</strong> Don’t worry — your FM-1 stays safely inside its update loader. Simply plug the USB cable back in and click <strong>Connect &amp; Flash Adrift</strong> again; it picks up right where it stopped.
+                  </p>
+                </div>
+              </details>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 3. WHAT ADRIFT DOES — VISUAL SOUND ARCHITECTURE -->
+    <section id="sound">
+      <div class="container">
+        <div class="section-header">
+          <span class="eyebrow">Inside the Sound</span>
+          <h2>Not Another FM Synth — A Living Acoustic &amp; Analog Resonator</h2>
+          <p>
+            Inspired by Bucket-Brigade Delay physical modeling, every single voice in Adrift works like a real acoustic instrument: an expressive <strong>Spark</strong> excites a tuned <strong>Resonating Body</strong>, sculpted by looping envelopes, modulation, and lush studio effects.
+          </p>
+        </div>
+
+        <div class="signal-flow-grid">
+          <article class="stage-card">
+            <span class="stage-badge" style="background:rgba(248,190,48,0.14);color:var(--g1-gold)">STAGE 1 · EXCITER</span>
+            <h3>The Spark</h3>
+            <p>
+              Pluck, bow, or blow into the voice. Morph seamlessly from pure Sine through Triangle, Saw, and Variable-Width Pulse, mix in crusty vintage Sample &amp; Hold noise for breathy chiff, or dial in a sharp acoustic Pluck transient.
+            </p>
+            <ul class="stage-tags" role="list">
+              <li>Morphing Wave</li>
+              <li>S&amp;H Noise Chiff</li>
+              <li>Pluck Burst</li>
+              <li>Analog Drift</li>
+            </ul>
+          </article>
+
+          <article class="stage-card">
+            <span class="stage-badge" style="background:rgba(56,216,248,0.14);color:var(--g3-cyan)">STAGE 2 · 1024-STAGE BBD</span>
+            <h3>The Resonating Body</h3>
+            <p>
+              Each voice feeds a key-tracked Bucket-Brigade Delay line that vibrates at the exact pitch you play. Dampen high frequencies like nylon strings, invert polarity for hollow clarinet &amp; marimba pipes, add metallic sitar buzz with Dispersion, or push Feedback into singing self-oscillation.
+            </p>
+            <ul class="stage-tags" role="list">
+              <li>Tuned String / Pipe</li>
+              <li>12 dB Resonant LPF</li>
+              <li>Self-Oscillation</li>
+              <li>All-Pass Dispersion</li>
+            </ul>
+          </article>
+
+          <article class="stage-card">
+            <span class="stage-badge" style="background:rgba(168,132,255,0.14);color:var(--g6-violet)">STAGE 3 · MOTION &amp; SPACE</span>
+            <h3>Movement &amp; Stereo FX</h3>
+            <p>
+              Stagger chord strums or create granular clouds with looping <strong>ENV 1</strong>, lock infinite ambient pads with <strong>ENV 2 Drone Hold</strong>, animate 23 targets with <strong>3 LFOs</strong> and ratcheting Arpeggiators, then run through Stereo Chorus, Ping-Pong Delay, Shimmer Reverb, and Bus Glue.
+            </p>
+            <ul class="stage-tags" role="list">
+              <li>Looping Envelopes</li>
+              <li>Hands-Free Drones</li>
+              <li>3 LFOs + Arp</li>
+              <li>Shimmer Reverb</li>
+            </ul>
+          </article>
+        </div>
+
+        <div class="groups-showcase">
+          <h3>16 Voices Shared Across 6 Color-Coded Instruments (G1–G6)</h3>
+          <p>
+            Adrift gives you <strong>16 voices</strong> that you can divide freely across <strong>6 independent Voice Groups</strong>. Stack multiple groups on MIDI Channel 1 to build rich multi-layered instruments (like guitar + fifth harmonic + octave shimmer), or put each group on its own MIDI channel to sequence a whole band from one pocket synth.
+          </p>
+
+          <ul class="group-swatches" role="list">
+            <li class="group-swatch">
+              <span class="swatch-pip" style="background:var(--g1-gold)" aria-hidden="true"></span>
+              <div><strong>G1 · Gold</strong><span>Default Ch 1</span></div>
+            </li>
+            <li class="group-swatch">
+              <span class="swatch-pip" style="background:var(--g2-emerald)" aria-hidden="true"></span>
+              <div><strong>G2 · Emerald</strong><span>Default Ch 2</span></div>
+            </li>
+            <li class="group-swatch">
+              <span class="swatch-pip" style="background:var(--g3-cyan)" aria-hidden="true"></span>
+              <div><strong>G3 · Cyan</strong><span>Default Ch 3</span></div>
+            </li>
+            <li class="group-swatch">
+              <span class="swatch-pip" style="background:var(--g4-coral)" aria-hidden="true"></span>
+              <div><strong>G4 · Coral</strong><span>Default Ch 4</span></div>
+            </li>
+            <li class="group-swatch">
+              <span class="swatch-pip" style="background:var(--g5-magenta)" aria-hidden="true"></span>
+              <div><strong>G5 · Magenta</strong><span>Default Ch 5</span></div>
+            </li>
+            <li class="group-swatch">
+              <span class="swatch-pip" style="background:var(--g6-violet)" aria-hidden="true"></span>
+              <div><strong>G6 · Violet</strong><span>Default Ch 6</span></div>
+            </li>
+          </ul>
+
+          <div class="modes-trio">
+            <div class="mode-box">
+              <h4>POLY (Round-Robin)</h4>
+              <p>Play lush chords where each new note rings out naturally through its own independent BBD string or pipe.</p>
+            </div>
+            <div class="mode-box">
+              <h4>UNI (Stacked Unison)</h4>
+              <p>Trigger all of a group’s voices together on every key with analog detune and wide left-right stereo spread.</p>
+            </div>
+            <div class="mode-box">
+              <h4>SUPER (Oscillator Stack)</h4>
+              <p>Drive up to 16 detuned oscillators into a shared stereo resonator pair for earth-shaking bass and supersaw walls.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 4. INTERACTIVE HARDWARE CONTROL & SCREEN GUIDE -->
+    <section id="controls">
+      <div class="container">
+        <div class="section-header">
+          <span class="eyebrow">How to Play &amp; Tweak</span>
+          <h2>Every Knob, Button &amp; OLED Screen Explained</h2>
+          <p>
+            Because the M-VAVE FM-1 has fixed labels printed on its case, select any control below to see what it opens in Adrift, preview the real hardware OLED screens, and learn what <strong>Knobs 1–4</strong> do on each page.
+          </p>
+        </div>
+
+        <div class="explorer-shell">
+          <div class="explorer-layout">
+            <ul id="control-guide-list" class="control-list" role="list" aria-label="Hardware controls"></ul>
+
+            <div class="explorer-detail" aria-live="polite">
+              <div class="oled-frame">
+                <img
+                  id="cg-screen-img"
+                  src="./assets/screens/01_home_scope.png"
+                  width="480"
+                  height="480"
+                  loading="lazy"
+                  decoding="async"
+                  alt="Adrift hardware OLED screen preview"
+                >
+                <p id="cg-screen-caption" class="oled-caption"></p>
+              </div>
+
+              <div class="explorer-copy">
+                <span id="cg-hw-label" class="cg-hw-tag"></span>
+                <h3 id="cg-adrift-role"></h3>
+                <p id="cg-summary"></p>
+
+                <div id="cg-subpage-tabs" class="subpage-tabs" role="group" aria-label="Screen subpages"></div>
+
+                <div id="cg-tip" class="pro-tip-box"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 5. 24 FACTORY PRESETS GALLERY -->
+    <section id="presets">
+      <div class="container">
+        <div class="section-header">
+          <span class="eyebrow">Ready-to-Play Sounds</span>
+          <h2>24 Multi-Layered Factory Presets (+ 24 User Slots)</h2>
+          <p>
+            Click <strong>Play in Emulator</strong> on any patch below to load it directly into the live FM-1 at the top of the page. On hardware, turn <strong>PRESETS</strong> to audition patches non-destructively and press <strong>OCT+</strong> to load.
+          </p>
+        </div>
+
+        <div class="presets-toolbar">
+          <div class="preset-cat-tabs" role="group" aria-label="Filter presets by instrument style">
+            <button type="button" class="btn btn-secondary" data-preset-cat="all" aria-pressed="true">All 24</button>
+            <button type="button" class="btn btn-ghost" data-preset-cat="strings" aria-pressed="false">Plucked &amp; Winds</button>
+            <button type="button" class="btn btn-ghost" data-preset-cat="pads" aria-pressed="false">Pads &amp; Clouds</button>
+            <button type="button" class="btn btn-ghost" data-preset-cat="keys" aria-pressed="false">Keys, Organ &amp; Mallets</button>
+            <button type="button" class="btn btn-ghost" data-preset-cat="leads" aria-pressed="false">Bass, Unison &amp; Drums</button>
+          </div>
+
+          <search aria-label="Search factory presets">
+            <label for="preset-search-input" class="visually-hidden">Search presets</label>
+            <input type="search" id="preset-search-input" placeholder="Search presets (e.g. Sitar, Pad, Organ)…">
+          </search>
+        </div>
+
+        <div class="presets-grid-wrap">
+          <div id="presets-grid" class="presets-grid"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 6. EXTERNAL MIDI, CLOCK SYNC & STUDIO GUIDE -->
+    <section id="midi">
+      <div class="container">
+        <div class="section-header">
+          <span class="eyebrow">Studio &amp; Live Setup</span>
+          <h2>Play with External Keyboards, Sequencers &amp; DAWs</h2>
+          <p>
+            Adrift responds simultaneously to USB-C MIDI and the 3.5 mm TRS MIDI IN jack, complete with velocity, pitch bend, mod wheel, sustain pedal, aftertouch, and tight tempo sync.
+          </p>
+        </div>
+
+        <div class="midi-cards-grid">
+          <article class="midi-info-card">
+            <h3>6-Channel Multi-Timbral Sequencing</h3>
+            <p>
+              In the <strong>SEQ (Groups)</strong> screen, assign Groups <code>G1</code>–<code>G6</code> to any MIDI channels <code>1</code>–<code>16</code>. Drive a Super Bass on Ch 1, plucked chords on Ch 2, a ratcheting arp on Ch 3, and modal drums on Ch 4 — all from one sequencer.
+            </p>
+          </article>
+
+          <article class="midi-info-card">
+            <h3>Automatic MIDI Clock Sync</h3>
+            <p>
+              Send standard MIDI Clock from your DAW, Digitakt, or KeyStep and Adrift locks on automatically (30–300 BPM). Both the per-group Arpeggiators and the Master Ping-Pong Delay snap cleanly to musical subdivisions.
+            </p>
+          </article>
+
+          <article class="midi-info-card">
+            <h3>Preset &amp; Bank Recall</h3>
+            <p>
+              Switch full 6-group performances remotely from your controller or DAW: send <code>CC 0 = 0</code> + Program Change <code>0–23</code> for Factory Presets <code>P1–P24</code>, or <code>CC 0 = 1</code> + Program Change <code>0–23</code> for your saved User Presets <code>U1–U24</code>.
+            </p>
+          </article>
+        </div>
+
+        <details class="accordion">
+          <summary>Complete MIDI CC Parameter Chart (Searchable)</summary>
+          <div class="accordion-body">
+            <search class="cc-search-bar" aria-label="Search MIDI CC chart">
+              <label for="midi-cc-search" class="visually-hidden">Filter MIDI CC controls</label>
+              <input type="search" id="midi-cc-search" placeholder="Search by CC number, section, or parameter (e.g. Feedback, Shimmer, CC 74)…">
+              <span id="midi-cc-count" class="cc-count"></span>
+            </search>
+
+            <div class="table-scroll">
+              <table class="cc-table">
+                <thead>
+                  <tr>
+                    <th scope="col">CC #</th>
+                    <th scope="col">Section</th>
+                    <th scope="col">Musical Parameter</th>
+                    <th scope="col">Range / Behavior</th>
+                  </tr>
+                </thead>
+                <tbody id="midi-cc-tbody"></tbody>
+              </table>
+            </div>
+          </div>
+        </details>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="container footer-inner">
+      <div>
+        <strong>Adrift</strong> — Custom Synthesizer Firmware for the M-VAVE FM-1 · Released under MPL-2.0.
+      </div>
+      <div>
+        <a href="https://github.com/romainguy/adrift" target="_blank" rel="noopener noreferrer">Source &amp; Releases on GitHub</a>
+      </div>
+    </div>
+  </footer>
+
+  <!-- Computer Keyboard & Touch Shortcuts Modal -->
+  <dialog id="shortcuts-dialog" class="modal-dialog" closedby="any" aria-labelledby="shortcuts-title">
+    <div class="modal-header">
+      <h2 id="shortcuts-title">Playing the Browser Emulator</h2>
+      <button type="button" id="btn-close-shortcuts" class="btn btn-ghost">Close</button>
+    </div>
+    <div class="modal-body">
+      <p>
+        You can play Adrift with your mouse, multi-touch screen, external USB-MIDI keyboard, or your computer’s QWERTY keyboard:
+      </p>
+      <dl class="shortcut-dl">
+        <dt><kbd>Z</kbd> – <kbd>M</kbd> &amp; <kbd>S</kbd><kbd>D</kbd><kbd>G</kbd><kbd>H</kbd><kbd>J</kbd></dt>
+        <dd>Play chromatic piano notes in the main octave (C4–B4).</dd>
+
+        <dt><kbd>Q</kbd> <kbd>W</kbd> <kbd>E</kbd> <kbd>R</kbd> <kbd>T</kbd> <kbd>Y</kbd> <kbd>U</kbd> <kbd>I</kbd></dt>
+        <dd>Play upper-octave white keys (C5–C6).</dd>
+
+        <dt><kbd>[</kbd> and <kbd>]</kbd></dt>
+        <dd><strong>OCT -</strong> / <strong>OCT +</strong> (shift keyboard octave, or Cancel / Confirm inside Presets, Scales &amp; Save menus).</dd>
+
+        <dt><kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd> <kbd>4</kbd> <kbd>5</kbd></dt>
+        <dd>Open sound-shaping screens: <strong>EXC</strong>, <strong>ENV1</strong>, <strong>BBD</strong>, <strong>ENV2</strong>, and <strong>MOD</strong> (press again to flip subpages).</dd>
+
+        <dt><kbd>6</kbd> · <kbd>9</kbd> · <kbd>0</kbd> · <kbd>F</kbd></dt>
+        <dd>Open <strong>HOME</strong> visualizers (<kbd>6</kbd>), <strong>ARP</strong> (<kbd>9</kbd>), <strong>GROUPS</strong> (<kbd>0</kbd>), or Master <strong>FX</strong> (<kbd>F</kbd>).</dd>
+
+        <dt><kbd>7</kbd> · <kbd>-</kbd>/<kbd>=</kbd> · <kbd>;</kbd>/<kbd>'</kbd></dt>
+        <dd>Cycle Voice Group <code>G1–G6</code> (<kbd>7</kbd>), browse Presets (<kbd>-</kbd> / <kbd>=</kbd>), or browse Scales (<kbd>;</kbd> / <kbd>'</kbd>).</dd>
+
+        <dt><kbd>8</kbd> (or <kbd>⌘S</kbd> / <kbd>Ctrl+S</kbd>)</dt>
+        <dd>Open <strong>SAVE PRESET</strong> — type your patch name directly on your keyboard and press <kbd>Enter</kbd> to save!</dd>
+
+        <dt>Knobs &amp; OLED Badges</dt>
+        <dd>Drag any knob vertically (hold <kbd>Shift</kbd> for fine tune), scroll your mouse wheel over a knob, or click badges right on the OLED screen.</dd>
+      </dl>
+    </div>
+  </dialog>
+
+  <script type="module" src="./js/app.js"></script>
+</body>
+</html>

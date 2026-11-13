@@ -14,6 +14,11 @@ for cmd in clang python3 cargo sdl2-config; do
     fi
 done
 
+if ! command -v wasm-ld >/dev/null 2>&1 && [ ! -x /opt/homebrew/opt/lld/bin/wasm-ld ]; then
+    echo "==> Installing llvm and lld (wasm-ld) via Homebrew for WebAssembly builds..."
+    brew install llvm lld
+fi
+
 if ! command -v docker >/dev/null 2>&1 || ! command -v colima >/dev/null 2>&1; then
     echo "==> Installing colima, docker CLI, and qemu via Homebrew..."
     brew install colima docker qemu
@@ -30,4 +35,4 @@ echo "==> [3/4] Fetching JieLi AC791N Apache-2.0 SDK blobs & pi32v2 Linux toolch
 echo "==> [4/4] Building joakimeriksson/fm1-emu (fm1-live & fm1-emu)..."
 cargo build --release --manifest-path "$ROOT/external/fm1-emu/Cargo.toml" -p fm1-live -p fm1-emu
 
-echo "==> Environment ready! Run './build.sh test', './build.sh sdl', './build.sh fw', or './build.sh emu'."
+echo "==> Environment ready! Run './build.sh test', './build.sh sdl', './build.sh fw', './build.sh web', or './build.sh emu'."

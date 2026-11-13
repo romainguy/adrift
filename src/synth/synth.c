@@ -1,0 +1,851 @@
+#include "synth_internal.h"
+
+void adrift_synth_init(adrift_synth_t *s) {
+    uint8_t *raw = (uint8_t *)s;
+    for (uint32_t i = 0; i < (uint32_t)sizeof(*s); i++) {
+        raw[i] = 0u;
+    }
+    s->hw_master_pot   = -1;
+    s->master_gain_q15 = 32767;
+    s->last_note       = 60u;
+    s->edit_group      = 0u;
+    s->midi_clk_bpm    = 120u;
+    adrift_fx_init(&s->fx);
+
+    for (uint8_t v = 0; v < ADRIFT_MAX_VOICES; v++) {
+        adrift_voice_t *vc = &s->voices[v];
+        vc->owner_group    = -1;
+        vc->group_slot     = 0u;
+        vc->note           = 60u;
+        vc->velocity       = 100u;
+        vc->lfo_phase      = (uint32_t)v * (0xFFFFFFFFu / ADRIFT_MAX_VOICES); /* Even spread across V1..V16 (v=0 at 0) */
+        vc->lfo2_phase     = (uint32_t)v * 0x517CC1B7u;
+        vc->lfo3_phase     = (uint32_t)v * 0x9E3779B9u;
+        vc->lfo_rng        = 0xC0FFEE11u ^ ((uint32_t)v * 0x9E3779B9u);
+        vc->lfo_sh_q15     = dsp_white_noise_q15(&vc->lfo_rng);
+        vc->lfo2_sh_q15    = dsp_white_noise_q15(&vc->lfo_rng);
+        vc->lfo3_sh_q15    = dsp_white_noise_q15(&vc->lfo_rng);
+        vc->dry_gain_q15   = 16384;
+        vc->wet_gain_q15   = 16384;
+        vc->grp_gain_l_q15 = 27500;
+        vc->grp_gain_r_q15 = 27500;
+        adrift_exciter_init(&vc->exc, v);
+        adrift_env_init(&vc->env1);
+        adrift_svf_init(&vc->in_lpf);
+        adrift_bbd_init(&vc->bbd, v);
+        adrift_env_init(&vc->env2);
+    }
+
+    adrift_synth_load_preset(s, 0u);
+}
+
+static inline int32_t step_lfo_osc(uint32_t *phase_io,
+                                   int32_t *sh_q15_io,
+                                   uint32_t *rng_io,
+                                   uint8_t wave,
+                                   int16_t rate,
+                                   uint32_t frames,
+                                   bool need_out) {
+    /* LFO rate 0..1023 -> ~0.05 Hz .. 30 Hz */
+    int32_t  r       = dsp_clamp_i32(rate, 0, 1023);
+    uint32_t r2      = (uint32_t)(r * r) >> 10; /* 0..1022 */
+    uint32_t per_smp = 4870u + r2 * 2852u;
+    uint32_t prev_ph = *phase_io;
+    uint32_t next_ph = prev_ph + per_smp * frames;
+    *phase_io        = next_ph;
+
+    if (!need_out) {
+        if (wave >= ADRIFT_LFO_SH && next_ph < prev_ph) {
+            *sh_q15_io = dsp_white_noise_q15(rng_io);
+        }
+        return 0;
+    }
+
+    int32_t out_q15 = 0;
+    switch (wave) {
+        case ADRIFT_LFO_SINE:
+            out_q15 = dsp_sine_lut_q15(next_ph);
+            break;
+        case ADRIFT_LFO_TRI: {
+            uint32_t p16 = next_ph >> 16;
+            out_q15 = (p16 < 32768u) ? ((int32_t)(p16 << 1) - 32768)
+                                     : (32767 - (int32_t)((p16 - 32768u) << 1));
+            break;
+        }
+        case ADRIFT_LFO_SAW:
+            out_q15 = (int32_t)(next_ph >> 16) - 32768;
+            break;
+        case ADRIFT_LFO_SQR:
+            out_q15 = (next_ph < 0x80000000u) ? 32767 : -32767;
+            break;
+        case ADRIFT_LFO_SH:
+        default:
+            if (next_ph < prev_ph) {
+                *sh_q15_io = dsp_white_noise_q15(rng_io);
+            }
+            out_q15 = *sh_q15_io;
+            break;
+    }
+    return out_q15;
+}
+
+typedef struct {
+    int32_t vco_pitch_q8;
+    int32_t vco_morph;
+    int32_t vco_pwm;
+    int32_t in_lpf;
+    int32_t bbd_pitch_q8;
+    int32_t fb_lpf;
+    int32_t fb_amt;
+    int32_t pan;
+    int32_t spread;
+    int32_t dry_wet;
+    int32_t vca;
+    int32_t ex_mix;
+    int32_t ex_lvl;
+    int32_t sh_clk;
+    int32_t in_res;
+    int32_t dispr;
+    int32_t env1_atk;
+    int32_t env1_dec;
+    int32_t env1_sus;
+    int32_t env1_rel;
+    int32_t env1_dly;
+    int32_t lfo1_rate;
+} adrift_mod_accum_t;
+
+static inline void clear_mod_accum(adrift_mod_accum_t *m) {
+    m->vco_pitch_q8 = 0;
+    m->vco_morph    = 0;
+    m->vco_pwm      = 0;
+    m->in_lpf       = 0;
+    m->bbd_pitch_q8 = 0;
+    m->fb_lpf       = 0;
+    m->fb_amt       = 0;
+    m->pan          = 0;
+    m->spread       = 0;
+    m->dry_wet      = 0;
+    m->vca          = 0;
+    m->ex_mix       = 0;
+    m->ex_lvl       = 0;
+    m->sh_clk       = 0;
+    m->in_res       = 0;
+    m->dispr        = 0;
+    m->env1_atk     = 0;
+    m->env1_dec     = 0;
+    m->env1_sus     = 0;
+    m->env1_rel     = 0;
+    m->env1_dly     = 0;
+    m->lfo1_rate    = 0;
+}
+
+static inline void accum_lfo_mod(uint8_t dest, int32_t mod_sig, adrift_mod_accum_t *m) {
+    switch (dest) {
+        case ADRIFT_MOD_VCO_PITCH: m->vco_pitch_q8 += (mod_sig * (12 << 8)) >> 15; break;
+        case ADRIFT_MOD_VCO_MORPH: m->vco_morph    += (mod_sig * 512) >> 15; break;
+        case ADRIFT_MOD_VCO_PWM:   m->vco_pwm      += (mod_sig * 480) >> 15; break;
+        case ADRIFT_MOD_IN_LPF:    m->in_lpf       += (mod_sig * 512) >> 15; break;
+        case ADRIFT_MOD_BBD_PITCH: m->bbd_pitch_q8 += (mod_sig * (4 << 8)) >> 15; break;
+        case ADRIFT_MOD_FB_LPF:    m->fb_lpf       += (mod_sig * 512) >> 15; break;
+        case ADRIFT_MOD_FB_AMT:    m->fb_amt       += (mod_sig * 256) >> 15; break;
+        case ADRIFT_MOD_ALL_PITCH: {
+            int32_t dp = (mod_sig * (12 << 8)) >> 15;
+            m->vco_pitch_q8 += dp;
+            m->bbd_pitch_q8 += dp;
+            break;
+        }
+        case ADRIFT_MOD_PAN:       m->pan          += (mod_sig * 512) >> 15; break;
+        case ADRIFT_MOD_SPREAD:    m->spread       += (mod_sig * 512) >> 15; break;
+        case ADRIFT_MOD_DRY_WET:   m->dry_wet      += (mod_sig * 512) >> 15; break;
+        case ADRIFT_MOD_VCA:       m->vca          += (mod_sig * 1023) >> 15; break;
+        case ADRIFT_MOD_EX_MIX:    m->ex_mix       += (mod_sig * 512) >> 15; break;
+        case ADRIFT_MOD_EX_LVL:    m->ex_lvl       += (mod_sig * 512) >> 15; break;
+        case ADRIFT_MOD_SH_CLK:    m->sh_clk       += (mod_sig * 512) >> 15; break;
+        case ADRIFT_MOD_IN_RES:    m->in_res       += (mod_sig * 512) >> 15; break;
+        case ADRIFT_MOD_DISPR:     m->dispr        += (mod_sig * 512) >> 15; break;
+        case ADRIFT_MOD_ENV1_ATK:  m->env1_atk     += (mod_sig * 512) >> 15; break;
+        case ADRIFT_MOD_ENV1_DEC:  m->env1_dec     += (mod_sig * 512) >> 15; break;
+        case ADRIFT_MOD_ENV1_SUS:  m->env1_sus     += (mod_sig * 512) >> 15; break;
+        case ADRIFT_MOD_ENV1_REL:  m->env1_rel     += (mod_sig * 512) >> 15; break;
+        case ADRIFT_MOD_ENV1_DLY:  m->env1_dly     += (mod_sig * 512) >> 15; break;
+        case ADRIFT_MOD_LFO1_RATE: m->lfo1_rate    += (mod_sig * 512) >> 15; break;
+        default: break;
+    }
+}
+
+static int32_t step_voice_lfos_and_accum(adrift_voice_t *vc,
+                                         const adrift_patch_t *vp,
+                                         int32_t lfo1_tot_dep,
+                                         uint32_t frames,
+                                         adrift_mod_accum_t *m,
+                                         bool force_lfo1_out) {
+    /* Step LFO 2 & LFO 3 first so cross-modulation targeting L1 RT modulates LFO 1 on the same block */
+    bool has_lfo2 = (vp->lfo2_depth != 0);
+    int32_t lfo2_q15 = step_lfo_osc(&vc->lfo2_phase, &vc->lfo2_sh_q15, &vc->lfo_rng,
+                                    vp->lfo2_wave, vp->lfo2_rate, frames, has_lfo2);
+    if (has_lfo2) {
+        int32_t dep2 = dsp_clamp_i32(vp->lfo2_depth, -512, 512);
+        int32_t sig2 = (lfo2_q15 * dep2) >> 9;
+        accum_lfo_mod(vp->lfo2_dest, sig2, m);
+    }
+
+    bool has_lfo3 = (vp->lfo3_depth != 0);
+    int32_t lfo3_q15 = step_lfo_osc(&vc->lfo3_phase, &vc->lfo3_sh_q15, &vc->lfo_rng,
+                                    vp->lfo3_wave, vp->lfo3_rate, frames, has_lfo3);
+    if (has_lfo3) {
+        int32_t dep3 = dsp_clamp_i32(vp->lfo3_depth, -512, 512);
+        int32_t sig3 = (lfo3_q15 * dep3) >> 9;
+        accum_lfo_mod(vp->lfo3_dest, sig3, m);
+    }
+
+    bool need_lfo1 = (lfo1_tot_dep != 0) || force_lfo1_out;
+    int16_t eff_lfo1_rate = (int16_t)dsp_clamp_i32((int32_t)vp->lfo_rate + m->lfo1_rate, 0, 1023);
+    int32_t lfo1_q15 = step_lfo_osc(&vc->lfo_phase, &vc->lfo_sh_q15, &vc->lfo_rng,
+                                    vp->lfo_wave, eff_lfo1_rate, frames, need_lfo1);
+    if (lfo1_tot_dep != 0 && vp->lfo_dest < ADRIFT_LFO1_DEST_COUNT) {
+        int32_t sig1 = (lfo1_q15 * lfo1_tot_dep) >> 9;
+        accum_lfo_mod(vp->lfo_dest, sig1, m);
+    }
+
+    return lfo1_q15;
+}
+
+/* Smooth C1-continuous rational soft-knee limiter above -2.5 dBFS (24576) */
+DSP_ALWAYS_INLINE int16_t master_soft_clip_s16(int32_t y) {
+    if (y >= -24576 && y <= 24576) {
+        return (int16_t)y;
+    }
+    int32_t  ay = (y < 0) ? -y : y;
+    uint32_t d  = (uint32_t)(ay - 24576);
+    if (d > 262144u) d = 262144u;
+    int32_t out = 24576 + (int32_t)((8191u * d) / (8191u + d));
+    return (int16_t)((y < 0) ? -out : out);
+}
+
+typedef struct {
+    int32_t dry_g;
+    int32_t wet_g;
+    int32_t grp_gl;
+    int32_t grp_gr;
+    int32_t dry_step;
+    int32_t wet_step;
+    int32_t grp_l_step;
+    int32_t grp_r_step;
+} synth_mix_gains_t;
+
+static DSP_HOT_RAM void synth_accum_super_ram(int32_t *exc_buf,
+                                              const int32_t *wet_buf,
+                                              uint32_t frames) {
+    for (uint32_t i = 0; i < frames; i++) {
+        exc_buf[i] += wet_buf[i];
+    }
+}
+
+static DSP_HOT_RAM void synth_exc_vca_ram(int32_t *exc_buf,
+                                          const int32_t *env1_buf,
+                                          uint32_t frames) {
+    for (uint32_t i = 0; i < frames; i++) {
+        int32_t e = dsp_clamp_i32(exc_buf[i], -65535, 65535);
+        exc_buf[i] = dsp_mul_q15(e, env1_buf[i]);
+    }
+}
+
+static DSP_HOT_RAM void synth_mix_voice_ram(const synth_mix_gains_t *g,
+                                            const int32_t *inlpf_buf,
+                                            const int32_t *wet_buf,
+                                            const int32_t *env2_buf,
+                                            int32_t *accum_l,
+                                            int32_t *accum_r,
+                                            uint32_t frames,
+                                            bool inlpf_zero) {
+    int32_t wet_g      = g->wet_g;
+    int32_t grp_gl     = g->grp_gl;
+    int32_t grp_gr     = g->grp_gr;
+    int32_t wet_step   = g->wet_step;
+    int32_t grp_l_step = g->grp_l_step;
+    int32_t grp_r_step = g->grp_r_step;
+
+    if (inlpf_zero) {
+        if ((wet_step | grp_l_step | grp_r_step) == 0) {
+            for (uint32_t i = 0; i < frames; i++) {
+                int32_t mixed = dsp_mul_q15(wet_buf[i], wet_g);
+                int32_t vout  = dsp_mul_q15(mixed, env2_buf[i]);
+                accum_l[i]   += dsp_mul_q15(vout, grp_gl);
+                accum_r[i]   += dsp_mul_q15(vout, grp_gr);
+            }
+        } else {
+            for (uint32_t i = 0; i < frames; i++) {
+                wet_g  += wet_step;
+                grp_gl += grp_l_step;
+                grp_gr += grp_r_step;
+                int32_t mixed = dsp_mul_q15(wet_buf[i], wet_g);
+                int32_t vout  = dsp_mul_q15(mixed, env2_buf[i]);
+                accum_l[i]   += dsp_mul_q15(vout, grp_gl);
+                accum_r[i]   += dsp_mul_q15(vout, grp_gr);
+            }
+        }
+    } else {
+        int32_t dry_g    = g->dry_g;
+        int32_t dry_step = g->dry_step;
+        if ((dry_step | wet_step | grp_l_step | grp_r_step) == 0) {
+            for (uint32_t i = 0; i < frames; i++) {
+                int32_t mixed = dsp_mul_q15(inlpf_buf[i], dry_g) + dsp_mul_q15(wet_buf[i], wet_g);
+                int32_t vout  = dsp_mul_q15(mixed, env2_buf[i]);
+                accum_l[i]   += dsp_mul_q15(vout, grp_gl);
+                accum_r[i]   += dsp_mul_q15(vout, grp_gr);
+            }
+        } else {
+            for (uint32_t i = 0; i < frames; i++) {
+                dry_g  += dry_step;
+                wet_g  += wet_step;
+                grp_gl += grp_l_step;
+                grp_gr += grp_r_step;
+                int32_t mixed = dsp_mul_q15(inlpf_buf[i], dry_g) + dsp_mul_q15(wet_buf[i], wet_g);
+                int32_t vout  = dsp_mul_q15(mixed, env2_buf[i]);
+                accum_l[i]   += dsp_mul_q15(vout, grp_gl);
+                accum_r[i]   += dsp_mul_q15(vout, grp_gr);
+            }
+        }
+    }
+}
+
+static DSP_HOT_RAM void synth_sum_cores_ram(int32_t *accum_l,
+                                            int32_t *accum_r,
+                                            const int32_t *c1_l,
+                                            const int32_t *c1_r,
+                                            uint32_t frames) {
+    for (uint32_t i = 0; i < frames; i++) {
+        accum_l[i] += c1_l[i];
+        accum_r[i] += c1_r[i];
+    }
+}
+
+static DSP_HOT_RAM void synth_master_out_ram(adrift_synth_t *s,
+                                             const int32_t *accum_l,
+                                             const int32_t *accum_r,
+                                             int16_t *stereo_out,
+                                             int32_t target_master,
+                                             int32_t mg_step,
+                                             uint32_t frames) {
+    int32_t mg     = s->master_gain_q15;
+    int32_t peak   = s->peak_out_q15 - (s->peak_out_q15 >> 5);
+    uint8_t swr    = s->scope_wr;
+    bool    frozen = s->scope_frozen;
+
+    for (uint32_t i = 0; i < frames; i++) {
+        mg += mg_step;
+        int32_t acc_l  = dsp_clamp_i32(accum_l[i], -262144, 262144);
+        int32_t acc_r  = dsp_clamp_i32(accum_r[i], -262144, 262144);
+        int32_t mg_q12 = (mg + 1) >> 3; /* 0..4096: overflow-free with 16-voice sum */
+        int32_t yl     = (acc_l * mg_q12) >> 12;
+        int32_t yr     = (acc_r * mg_q12) >> 12;
+        int16_t s16_l  = master_soft_clip_s16(yl);
+        int16_t s16_r  = master_soft_clip_s16(yr);
+        stereo_out[2u * i]      = s16_l;
+        stereo_out[2u * i + 1u] = s16_r;
+
+        int32_t ay_l = s16_l < 0 ? -(int32_t)s16_l : (int32_t)s16_l;
+        int32_t ay_r = s16_r < 0 ? -(int32_t)s16_r : (int32_t)s16_r;
+        int32_t ay   = (ay_l > ay_r) ? ay_l : ay_r;
+        if (ay > peak) peak = ay;
+
+        /* Decimate by 4 (~11 kHz) into 128-sample UI scope ring (~11.6 ms window) */
+        if (!frozen && (i & 3u) == 0u) {
+            uint32_t sidx = swr & (ADRIFT_SCOPE_LEN - 1u);
+            s->scope_ring_l[sidx] = s16_l;
+            s->scope_ring_r[sidx] = s16_r;
+            s->scope_ring[sidx]   = (int16_t)(((int32_t)s16_l + (int32_t)s16_r) >> 1);
+            swr++;
+        }
+    }
+
+    s->master_gain_q15 = target_master;
+    s->peak_out_q15    = peak;
+    s->scope_wr        = swr;
+}
+
+typedef struct {
+    int32_t tot_dep;
+    int32_t pb_q8;
+    int32_t spread_q8;
+    int32_t base_vol;
+    int32_t super_vco_scale_q15;
+} adrift_group_block_prep_t;
+
+typedef struct {
+    int32_t accum_l[ADRIFT_BLOCK_SIZE];
+    int32_t accum_r[ADRIFT_BLOCK_SIZE];
+    int32_t exc_buf[ADRIFT_BLOCK_SIZE];
+    int32_t env1_buf[ADRIFT_BLOCK_SIZE];
+    int32_t inlpf_buf[ADRIFT_BLOCK_SIZE];
+    int32_t wet_buf[ADRIFT_BLOCK_SIZE];
+    int32_t env2_buf[ADRIFT_BLOCK_SIZE];
+} adrift_core_scratch_t;
+
+typedef struct {
+    adrift_synth_t           *synth;
+    adrift_group_block_prep_t grp_prep[ADRIFT_MAX_GROUPS];
+    uint8_t                   vlist[ADRIFT_MAX_VOICES];
+    uint8_t                   vcount;
+} adrift_c1_job_t;
+
+static adrift_core_scratch_t g_core_scratch[2] __attribute__((aligned(64)));
+static adrift_c1_job_t       g_c1_job;
+
+static void render_voice_list(adrift_synth_t *s,
+                              const adrift_group_block_prep_t *grp_prep,
+                              const uint8_t *vlist,
+                              uint8_t vcount,
+                              uint32_t frames,
+                              adrift_core_scratch_t *sc) {
+    int32_t *accum_l   = sc->accum_l;
+    int32_t *accum_r   = sc->accum_r;
+    int32_t *exc_buf   = sc->exc_buf;
+    int32_t *env1_buf  = sc->env1_buf;
+    int32_t *inlpf_buf = sc->inlpf_buf;
+    int32_t *wet_buf   = sc->wet_buf;
+    int32_t *env2_buf  = sc->env2_buf;
+
+    for (uint32_t i = 0; i < frames; i++) {
+        accum_l[i] = 0;
+        accum_r[i] = 0;
+    }
+
+    for (uint8_t idx = 0u; idx < vcount; idx++) {
+        uint8_t         v  = vlist[idx];
+        adrift_voice_t *vc = &s->voices[v];
+        int8_t          og = vc->owner_group;
+        const adrift_group_t            *gp = &s->groups[og];
+        const adrift_patch_t            *vp = &gp->patch;
+        const adrift_group_block_prep_t *gr = &grp_prep[og];
+        bool is_super = (gp->assign_mode == ADRIFT_GROUP_SUPER);
+
+        /* 1a. Per-voice LFO 1..3 + Env 1 DADSR */
+        int32_t tot_dep = gr->tot_dep;
+
+        adrift_mod_accum_t m;
+        clear_mod_accum(&m);
+        int32_t lfo_q15 = step_voice_lfos_and_accum(vc, vp, tot_dep, frames, &m, v == 0u);
+        if (v == 0u) {
+            s->lfo_out_q15 = lfo_q15;
+        }
+
+        bool    hold_onset = false;
+        int32_t env1_q15   = 0;
+        if (vc->env1.stage != ADRIFT_ENV_IDLE || vp->env1.drone_hold) {
+            adrift_env_params_t env1_p = vp->env1;
+            env1_p.attack      = (int16_t)dsp_clamp_i32((int32_t)vp->env1.attack      + m.env1_atk, 0, 1023);
+            env1_p.decay       = (int16_t)dsp_clamp_i32((int32_t)vp->env1.decay       + m.env1_dec, 0, 1023);
+            env1_p.sustain     = (int16_t)dsp_clamp_i32((int32_t)vp->env1.sustain     + m.env1_sus, 0, 1023);
+            env1_p.release     = (int16_t)dsp_clamp_i32((int32_t)vp->env1.release     + m.env1_rel, 0, 1023);
+            env1_p.onset_delay = (int16_t)dsp_clamp_i32((int32_t)vp->env1.onset_delay + m.env1_dly, 0, 1023);
+            adrift_env_update_coefs(&vc->env1, &env1_p);
+            hold_onset = (vc->env1.stage == ADRIFT_ENV_DELAY && vc->env1.delay_rem > frames);
+            adrift_env_process(&vc->env1, &env1_p, env1_buf, frames);
+            env1_q15 = (env1_buf[0] + env1_buf[frames - 1u]) >> 1;
+        }
+
+        int32_t pb_q8         = gr->pb_q8;
+        int32_t spread_q8     = gr->spread_q8;
+        int32_t semi_q8       = 0;
+        int32_t detune_q8     = 0;
+        int32_t slot_gain_q15 = 32767;
+        adrift_synth_compute_stack_slot_voicing(gp, vc->group_slot, spread_q8, &semi_q8, &detune_q8, &slot_gain_q15);
+
+        int32_t note_t          = dsp_clamp_i32((int32_t)vc->note + (int32_t)gp->transpose, 0, 127);
+        int32_t center_pitch_q8 = (note_t << 8) + pb_q8;
+        int32_t base_pitch_q8   = center_pitch_q8 + semi_q8 + detune_q8;
+        /* In SUPER mode, slots 0 (Left) and 1 (Right) form a stereo BBD pair with opposite micro-detune (+-11c max) */
+        int32_t super_bbd_det_q8 = (is_super && gp->num_voices > 1u)
+                                       ? ((spread_q8 * ((vc->group_slot == 0u) ? -88 : +96)) >> 10)
+                                       : 0;
+        int32_t bbd_pitch_q8    = is_super ? (center_pitch_q8 + super_bbd_det_q8) : base_pitch_q8;
+
+        int32_t eff_exc_lvl   = dsp_clamp_i32((int32_t)vp->exc.vco_level + m.ex_lvl, 0, 1023);
+        int32_t eff_noise_mix = dsp_clamp_i32((int32_t)vp->exc.noise_level + m.ex_mix, 0, 1023);
+
+        /* 2a. Exciter + Env 1 -> Exciter VCA (with silent-exciter fast path during BBD ringout!) */
+        bool exc_silent = (env1_q15 == 0 && vc->env1.stage == ADRIFT_ENV_IDLE && !vp->env1.drone_hold) ||
+                          (eff_exc_lvl == 0 &&
+                           vc->exc.vco_gain_q15 == 0 && vc->exc.noise_gain_q15 == 0 &&
+                           vc->exc.impulse_phase == 0u);
+        bool inlpf_zero = false;
+
+        if (exc_silent) {
+            vc->exc.vco_phase += vc->exc.vco_inc * frames;
+            vc->exc.sub_phase += (vc->exc.vco_inc >> 1) * frames;
+            if (is_super && gp->num_voices > 1u) {
+                for (uint8_t w = 0; w < ADRIFT_MAX_VOICES; w++) {
+                    adrift_voice_t *vw = &s->voices[w];
+                    if (w != v && vw->owner_group == og &&
+                        vw->group_slot > 1u && (vw->group_slot & 1u) == (vc->group_slot & 1u)) {
+                        adrift_mod_accum_t w_dummy;
+                        clear_mod_accum(&w_dummy);
+                        (void)step_voice_lfos_and_accum(vw, vp, 0, frames, &w_dummy, false);
+                        vw->exc.vco_phase += vw->exc.vco_inc * frames;
+                        vw->exc.sub_phase += (vw->exc.vco_inc >> 1) * frames;
+                    }
+                }
+            }
+            if (vc->in_lpf.ic1eq_q20 > -16 && vc->in_lpf.ic1eq_q20 < 16 &&
+                vc->in_lpf.ic2eq_q20 > -16 && vc->in_lpf.ic2eq_q20 < 16) {
+                vc->in_lpf.ic1eq_q20 = 0;
+                vc->in_lpf.ic2eq_q20 = 0;
+                for (uint32_t i = 0; i < frames; i++) {
+                    inlpf_buf[i] = 0;
+                }
+                inlpf_zero = true;
+            } else {
+                for (uint32_t i = 0; i < frames; i++) {
+                    exc_buf[i] = 0;
+                }
+            }
+        } else {
+            int16_t morph_1023 = 0;
+            adrift_exciter_params_t slot_exc = vp->exc;
+            slot_exc.vco_level   = (int16_t)eff_exc_lvl;
+            slot_exc.noise_level = (int16_t)eff_noise_mix;
+            slot_exc.sh_rate     = (int16_t)dsp_clamp_i32((int32_t)vp->exc.sh_rate + m.sh_clk, 0, 1023);
+
+            int32_t super_vco_scale_q15 = gr->super_vco_scale_q15;
+            int32_t super_wave_lvl      = 0;
+            if (is_super && gp->num_voices > 1u) {
+                /* Scale VCO wave level across per-channel stacked oscillators while preserving 100% stereo noise punch */
+                int32_t lvl_1023 = eff_exc_lvl;
+                int32_t mix_1023 = eff_noise_mix;
+                int32_t raw_wave = (int32_t)dsp_udiv_1023((uint32_t)(lvl_1023 * (1023 - mix_1023)));
+                int32_t raw_nois = (int32_t)dsp_udiv_1023((uint32_t)(lvl_1023 * mix_1023));
+                super_wave_lvl   = (raw_wave * super_vco_scale_q15) >> 15;
+                int32_t tot_lvl  = super_wave_lvl + raw_nois;
+                slot_exc.vco_level   = (int16_t)dsp_clamp_i32(tot_lvl, 0, 1023);
+                slot_exc.noise_level = (tot_lvl > 0) ? (int16_t)dsp_clamp_i32((raw_nois * 1023) / tot_lvl, 0, 1023) : 0;
+            }
+            uint32_t saved_vco_ph = vc->exc.vco_phase;
+            uint32_t saved_sub_ph = vc->exc.sub_phase;
+            uint32_t saved_imp_ph = vc->exc.impulse_phase;
+            adrift_exciter_prepare_block(&vc->exc, &slot_exc,
+                                         base_pitch_q8, m.vco_pitch_q8,
+                                         m.vco_morph, m.vco_pwm, &morph_1023);
+            adrift_exciter_process(&vc->exc, &slot_exc, morph_1023, exc_buf, frames);
+            if (hold_onset && slot_exc.pluck > 0) {
+                vc->exc.vco_phase     = saved_vco_ph;
+                vc->exc.sub_phase     = saved_sub_ph;
+                vc->exc.impulse_phase = saved_imp_ph;
+            }
+
+            /* In SUPER mode, slot 0 sums even companion exciters (2,4..) and slot 1 sums odd companion exciters (3,5..) */
+            if (is_super && gp->num_voices > 2u) {
+                adrift_exciter_params_t sub_exc = slot_exc;
+                sub_exc.noise_level = 0; /* 0% mix = pure wave on companion oscillators so stereo noise doesn't stack N times */
+                sub_exc.pluck       = (int16_t)(((int32_t)slot_exc.pluck * super_vco_scale_q15) >> 15);
+                for (uint8_t w = 0; w < ADRIFT_MAX_VOICES; w++) {
+                    adrift_voice_t *vw = &s->voices[w];
+                    if (w == v || vw->owner_group != og ||
+                        vw->group_slot <= 1u || (vw->group_slot & 1u) != (vc->group_slot & 1u)) {
+                        continue;
+                    }
+                    adrift_mod_accum_t w_mod;
+                    clear_mod_accum(&w_mod);
+                    (void)step_voice_lfos_and_accum(vw, vp, tot_dep, frames, &w_mod, false);
+
+                    int32_t w_semi_q8   = 0;
+                    int32_t w_detune_q8 = 0;
+                    int32_t w_gain_q15  = 32767;
+                    adrift_synth_compute_stack_slot_voicing(gp, vw->group_slot, spread_q8, &w_semi_q8, &w_detune_q8, &w_gain_q15);
+                    sub_exc.vco_level = (int16_t)((super_wave_lvl * w_gain_q15) >> 15);
+
+                    int16_t  w_morph  = 0;
+                    uint32_t w_vco_ph = vw->exc.vco_phase;
+                    uint32_t w_sub_ph = vw->exc.sub_phase;
+                    uint32_t w_imp_ph = vw->exc.impulse_phase;
+                    adrift_exciter_prepare_block(&vw->exc, &sub_exc,
+                                                 center_pitch_q8 + w_semi_q8 + w_detune_q8, w_mod.vco_pitch_q8,
+                                                 w_mod.vco_morph, w_mod.vco_pwm, &w_morph);
+                    adrift_exciter_process(&vw->exc, &sub_exc, w_morph, wet_buf, frames);
+                    if (hold_onset && sub_exc.pluck > 0) {
+                        vw->exc.vco_phase     = w_vco_ph;
+                        vw->exc.sub_phase     = w_sub_ph;
+                        vw->exc.impulse_phase = w_imp_ph;
+                    }
+                    DSP_CALL_RAM(synth_accum_super_ram)(exc_buf, wet_buf, frames);
+                }
+            }
+
+            DSP_CALL_RAM(synth_exc_vca_ram)(exc_buf, env1_buf, frames);
+        }
+
+        /* Subtle per-voice analog filter component tolerance for stacked/poly companion voices (slot 0 = exact 0) */
+        int32_t flt_tol = (gp->num_voices > 1u && vc->group_slot > 0u)
+                              ? (((int32_t)(vc->group_slot & 7u) - 3) * 4)
+                              : 0;
+
+        /* 2b. 12 dB/oct Input Low-Pass Filter (feeds BOTH Dry path and BBD Resonator) */
+        if (!inlpf_zero) {
+            int32_t in_cut = dsp_clamp_i32((int32_t)vp->in_lpf_cutoff + m.in_lpf + flt_tol, 0, 1023);
+            int32_t in_res = dsp_clamp_i32((int32_t)vp->in_lpf_res + m.in_res, 0, 1023);
+            adrift_svf_set_params(&vc->in_lpf, (int16_t)in_cut, (int16_t)in_res);
+            adrift_svf_process_lpf(&vc->in_lpf, exc_buf, inlpf_buf, frames);
+        }
+
+        /* 2c. 1024-stage Pitch-Tracked BBD Resonator */
+        adrift_bbd_params_t bbd_p = vp->bbd;
+        bbd_p.dispersion = (int16_t)dsp_clamp_i32((int32_t)vp->bbd.dispersion + m.dispr, 0, 1023);
+        int32_t target_fb_q14 = 0;
+        adrift_bbd_prepare_block(&vc->bbd, &bbd_p,
+                                 bbd_pitch_q8, m.bbd_pitch_q8,
+                                 m.fb_amt, m.fb_lpf + flt_tol, frames, &target_fb_q14);
+        adrift_bbd_process(&vc->bbd, &bbd_p, target_fb_q14, inlpf_buf, wet_buf, frames);
+
+        /* 2d. Dry/Wet Crossfade + Post-BBD Envelope 2 Output VCA + Group/Unison Gain + Stereo Pan */
+        bool env2_active = (vc->env2.stage != ADRIFT_ENV_IDLE || vp->env2.drone_hold);
+        if (env2_active) {
+            adrift_env_update_coefs(&vc->env2, &vp->env2);
+            adrift_env_process(&vc->env2, &vp->env2, env2_buf, frames);
+        } else {
+            vc->env2.level_q30 = 0;
+        }
+
+        int32_t dw = dsp_clamp_i32((int32_t)vp->dry_wet + m.dry_wet, 0, 1023);
+        if (is_super && gp->num_voices > 1u && eff_exc_lvl > 0 && eff_noise_mix < 1023 && dw > 640) {
+            /* In SUPER mode, preserve at least ~38% post-LPF multi-VCO body alongside the stereo BBD pair
+             * so high-Q BBD comb filtering does not strip away the detuned companion VCO sidebands */
+            dw = 640 + ((dw - 640) >> 2);
+        }
+        int32_t target_wet_q15 = (int32_t)dsp_udiv_1023((uint32_t)(dw * 32767));
+        int32_t target_dry_q15 = 32767 - target_wet_q15;
+
+        int32_t uni_scale = 32767;
+        if (gp->assign_mode == ADRIFT_GROUP_UNISON) {
+            uni_scale = dsp_mul_q15(k_unison_gain_q15[gp->num_voices], slot_gain_q15);
+        } else if (is_super && gp->num_voices > 1u) {
+            uni_scale = k_unison_gain_q15[2]; /* Stereo BBD pair constant-power normalization */
+        }
+        int32_t base_vol       = gr->base_vol;
+        int32_t vca_scale_1023 = dsp_clamp_i32(1023 + m.vca, 0, 1280);
+        int32_t eff_vol        = dsp_clamp_i32((int32_t)dsp_udiv_1023((uint32_t)(base_vol * vca_scale_1023)), 0, 1280);
+        int32_t target_grp_q15 = (int32_t)dsp_udiv_1023((uint32_t)(eff_vol * uni_scale));
+
+        int32_t pan_l_q15 = 32767;
+        int32_t pan_r_q15 = 32767;
+        adrift_synth_get_voice_pan_gains_cached_q15(vc, gp, m.pan, m.spread, &pan_l_q15, &pan_r_q15);
+        int32_t target_grp_l_q15 = dsp_mul_q15(target_grp_q15, pan_l_q15);
+        int32_t target_grp_r_q15 = dsp_mul_q15(target_grp_q15, pan_r_q15);
+
+        if (env2_active) {
+            synth_mix_gains_t mg;
+            mg.dry_g      = vc->dry_gain_q15;
+            mg.wet_g      = vc->wet_gain_q15;
+            mg.grp_gl     = vc->grp_gain_l_q15;
+            mg.grp_gr     = vc->grp_gain_r_q15;
+            mg.dry_step   = dsp_div_frames_i32(target_dry_q15   - mg.dry_g,  frames);
+            mg.wet_step   = dsp_div_frames_i32(target_wet_q15   - mg.wet_g,  frames);
+            mg.grp_l_step = dsp_div_frames_i32(target_grp_l_q15 - mg.grp_gl, frames);
+            mg.grp_r_step = dsp_div_frames_i32(target_grp_r_q15 - mg.grp_gr, frames);
+            DSP_CALL_RAM(synth_mix_voice_ram)(&mg, inlpf_buf, wet_buf, env2_buf, accum_l, accum_r, frames, inlpf_zero);
+        }
+
+        vc->dry_gain_q15   = target_dry_q15;
+        vc->wet_gain_q15   = target_wet_q15;
+        vc->grp_gain_l_q15 = target_grp_l_q15;
+        vc->grp_gain_r_q15 = target_grp_r_q15;
+
+        if (!vc->key_down && !vc->sustained &&
+            vc->env2.stage == ADRIFT_ENV_IDLE && !vp->env2.drone_hold) {
+            if (vc->bbd.peak_wet_q15 < 8) {
+                vc->active = false;
+                if (is_super) {
+                    for (uint8_t w = 0; w < ADRIFT_MAX_VOICES; w++) {
+                        if (s->voices[w].owner_group == og &&
+                            s->voices[w].group_slot > 1u &&
+                            (s->voices[w].group_slot & 1u) == (vc->group_slot & 1u)) {
+                            s->voices[w].active = false;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+static void c1_voice_worker(uint32_t frames) {
+    render_voice_list(g_c1_job.synth,
+                      g_c1_job.grp_prep,
+                      g_c1_job.vlist,
+                      g_c1_job.vcount,
+                      frames,
+                      &g_core_scratch[1]);
+}
+
+static void render_subblock(adrift_synth_t *s, int16_t *stereo_out, uint32_t frames) {
+    if (frames == 0u) return;
+
+    /* Precompute per-group block invariants once and partition active voices by DSP cost
+     * (SUPER multi-VCO -> Heavy active exciter -> Light BBD ringout) across CPU1 and CPU0.
+     * CPU1 receives the extra voice when active count is odd so CPU0 retains headroom for Master FX. */
+    adrift_group_block_prep_t grp_prep[ADRIFT_MAX_GROUPS];
+    for (uint8_t g = 0u; g < ADRIFT_MAX_GROUPS; g++) {
+        const adrift_group_t *gp = &s->groups[g];
+        if (gp->num_voices == 0u) {
+            continue;
+        }
+        const adrift_patch_t *vp = &gp->patch;
+        int32_t at_amt = (int32_t)dsp_udiv_127((uint32_t)gp->aftertouch * 120u);
+        int32_t mw_amt = (int32_t)dsp_udiv_127((uint32_t)gp->mod_wheel *
+                                               (uint32_t)dsp_clamp_i32(vp->mw_depth, 0, 1023));
+        grp_prep[g].tot_dep             = dsp_clamp_i32((int32_t)vp->lfo_depth + (mw_amt >> 1) + at_amt, -512, 512);
+        grp_prep[g].pb_q8               = ((int32_t)gp->pitch_bend_q13 * ((int32_t)vp->pb_range << 8)) >> 13;
+        grp_prep[g].spread_q8           = adrift_detune_to_q8(gp->unison_detune);
+        grp_prep[g].base_vol            = dsp_clamp_i32(vp->master_vol, 0, 1023);
+        grp_prep[g].super_vco_scale_q15 = k_unison_gain_q15[(gp->num_voices + 1u) >> 1];
+    }
+
+    uint8_t super_v[ADRIFT_MAX_VOICES];
+    uint8_t heavy_v[ADRIFT_MAX_VOICES];
+    uint8_t light_v[ADRIFT_MAX_VOICES];
+    uint8_t n_super = 0u, n_heavy = 0u, n_light = 0u;
+
+    for (uint8_t v = 0u; v < ADRIFT_MAX_VOICES; v++) {
+        adrift_voice_t *vc = &s->voices[v];
+        if (!vc->active || vc->owner_group < 0 || vc->owner_group >= ADRIFT_MAX_GROUPS) {
+            continue;
+        }
+        const adrift_group_t *gp = &s->groups[vc->owner_group];
+        if (gp->num_voices == 0u) {
+            vc->active = false;
+            continue;
+        }
+        bool is_super = (gp->assign_mode == ADRIFT_GROUP_SUPER);
+        if (is_super && vc->group_slot > 1u) {
+            /* Companion oscillators in a SUPER group are summed and stepped by stereo BBD slots 0 and 1 */
+            continue;
+        }
+        bool exc_idle = (vc->env1.stage == ADRIFT_ENV_IDLE && !gp->patch.env1.drone_hold);
+        if (is_super && gp->num_voices > 2u && !exc_idle) {
+            super_v[n_super++] = v;
+        } else if (!exc_idle) {
+            heavy_v[n_heavy++] = v;
+        } else {
+            light_v[n_light++] = v;
+        }
+    }
+
+    uint8_t n_total = (uint8_t)(n_super + n_heavy + n_light);
+    uint8_t c0_list[ADRIFT_MAX_VOICES];
+    uint8_t c0_count = 0u;
+    uint8_t c1_count = 0u;
+
+    if (n_total == 1u) {
+        c0_list[c0_count++] = (n_super > 0u) ? super_v[0] : ((n_heavy > 0u) ? heavy_v[0] : light_v[0]);
+    } else if (n_total >= 2u) {
+        bool to_c1 = true;
+        for (uint8_t i = 0u; i < n_super; i++) {
+            if (to_c1) g_c1_job.vlist[c1_count++] = super_v[i];
+            else       c0_list[c0_count++]        = super_v[i];
+            to_c1 = !to_c1;
+        }
+        for (uint8_t i = 0u; i < n_heavy; i++) {
+            if (to_c1) g_c1_job.vlist[c1_count++] = heavy_v[i];
+            else       c0_list[c0_count++]        = heavy_v[i];
+            to_c1 = !to_c1;
+        }
+        for (uint8_t i = 0u; i < n_light; i++) {
+            if (to_c1) g_c1_job.vlist[c1_count++] = light_v[i];
+            else       c0_list[c0_count++]        = light_v[i];
+            to_c1 = !to_c1;
+        }
+    }
+
+    bool c1_dispatched = false;
+    if (c1_count > 0u) {
+        g_c1_job.synth  = s;
+        g_c1_job.vcount = c1_count;
+        for (uint8_t g = 0u; g < ADRIFT_MAX_GROUPS; g++) {
+            g_c1_job.grp_prep[g] = grp_prep[g];
+        }
+        __asm__ volatile("" ::: "memory");
+        c1_dispatched = adrift_platform_run_worker(c1_voice_worker, frames);
+    }
+
+    /* CPU0 renders its assigned half of active voices */
+    render_voice_list(s, grp_prep, c0_list, c0_count, frames, &g_core_scratch[0]);
+    int32_t *accum_l = g_core_scratch[0].accum_l;
+    int32_t *accum_r = g_core_scratch[0].accum_r;
+
+    if (c1_count > 0u) {
+        if (!c1_dispatched || !adrift_platform_wait_worker()) {
+            /* Single-core host simulator or CPU1 fallback: CPU0 renders CPU1's voice list */
+            render_voice_list(s, grp_prep, g_c1_job.vlist, c1_count, frames, &g_core_scratch[1]);
+        }
+        DSP_CALL_RAM(synth_sum_cores_ram)(accum_l, accum_r, g_core_scratch[1].accum_l, g_core_scratch[1].accum_r, frames);
+    }
+
+    /* 2b. Master Stereo Bus / Send Effects (Chorus -> Ping-Pong Delay -> Shimmer Reverb) */
+    s->fx.clk_period_q4 = s->midi_clk_active ? s->midi_clk_period_q4 : 0u;
+    adrift_fx_process(&s->fx, &s->fx_params, accum_l, accum_r, frames);
+
+    /* 3. Hardware Master Pot, polyphonic soft-knee limiter, stereo output & UI scope capture */
+    int32_t target_master = (s->hw_master_pot >= 0)
+                                ? (int32_t)dsp_udiv_1023((uint32_t)dsp_clamp_i32(s->hw_master_pot, 0, 1023) * 32767u)
+                                : 32767;
+    int32_t mg_step = dsp_div_frames_i32(target_master - s->master_gain_q15, frames);
+    DSP_CALL_RAM(synth_master_out_ram)(s, accum_l, accum_r, stereo_out, target_master, mg_step, frames);
+}
+
+void adrift_synth_render_block(adrift_synth_t *s,
+                               int16_t *stereo_out,
+                               uint32_t frames,
+                               const adrift_midi_msg_t *midi_events,
+                               uint32_t num_midi) {
+    uint32_t cursor = 0u;
+    uint32_t ev_idx = 0u;
+
+    while (cursor < frames) {
+        while (ev_idx < num_midi && midi_events[ev_idx].sample_offset <= cursor) {
+            adrift_synth_handle_midi(s,
+                                     midi_events[ev_idx].status,
+                                     midi_events[ev_idx].data1,
+                                     midi_events[ev_idx].data2);
+            ev_idx++;
+        }
+
+        uint32_t next_stop = frames;
+        if (ev_idx < num_midi && midi_events[ev_idx].sample_offset < next_stop) {
+            next_stop = midi_events[ev_idx].sample_offset;
+        }
+        uint32_t chunk = next_stop - cursor;
+        if (chunk > ADRIFT_BLOCK_SIZE) {
+            chunk = ADRIFT_BLOCK_SIZE;
+        }
+        uint32_t arp_rem = adrift_arp_samples_until_next_event(s);
+        if (arp_rem == 0u) {
+            adrift_arp_advance_samples(s, 0u);
+            arp_rem = adrift_arp_samples_until_next_event(s);
+        }
+        if (arp_rem > 0u && arp_rem < chunk) {
+            chunk = arp_rem;
+        }
+        render_subblock(s, stereo_out + (2u * cursor), chunk);
+        adrift_arp_advance_samples(s, chunk);
+        if (s->midi_clk_since_last < 0x0FFFFFFFu) {
+            s->midi_clk_since_last += chunk;
+        }
+        if (s->midi_clk_active) {
+            if (s->midi_clk_timeout_samples > chunk) {
+                s->midi_clk_timeout_samples -= chunk;
+            } else {
+                s->midi_clk_timeout_samples = 0u;
+                s->midi_clk_active          = false;
+                s->midi_clk_running         = false;
+            }
+        }
+        cursor += chunk;
+    }
+
+    while (ev_idx < num_midi) {
+        adrift_synth_handle_midi(s,
+                                 midi_events[ev_idx].status,
+                                 midi_events[ev_idx].data1,
+                                 midi_events[ev_idx].data2);
+        ev_idx++;
+    }
+}

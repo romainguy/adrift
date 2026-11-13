@@ -1,0 +1,10 @@
+# Build outputs and local toolchain caches
+core
+/build/
+/.jieli/
+.DS_Store
+*.o
+*.d
+*.elf
+*.fwsc
+*.wav

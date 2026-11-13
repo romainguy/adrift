@@ -1,0 +1,6 @@
+[submodule "external/felucca-bsp"]
+	path = external/felucca-bsp
+	url = https://github.com/hugelton/felucca-bsp.git
+[submodule "external/fm1-emu"]
+	path = external/fm1-emu
+	url = https://github.com/joakimeriksson/fm1-emu.git

@@ -48,7 +48,7 @@ Instead of relying only on standard subtractive oscillators and filters, each of
 
 ## Playing & Editing on the Hardware
 
-### Two Golden Rules
+### Two Simple Principles
 
 - **Knobs `1`–`4` always match the 4 cards at the bottom of the screen.** Turn any of the four numbered knobs on the right to adjust the parameter directly in that column.
 - **Press an active screen button again to flip subpages.** Screens with more than four controls show a badge like `EXC 1/3` or `FX 2/3` — press the same button again to cycle through `1/3 → 2/3 → 3/3`.
@@ -102,6 +102,7 @@ Adrift's 16 voices are shared across **6 independent Voice Groups (`G1`–`G6`)*
 
 - **Single-Group Patch Import**: In the **Preset Browser** (`PRESETS` knob), turn **`KNOB 2` (`2:MD`)** from `FULL` to `GRP` and use **`KNOB 3` (`3:SR`)** to import *just one Voice Group* from any Factory or User preset into your current patch — great for mixing and matching layers!
 - **16 Performance Scales**: Turn **`ALGORITHM`** to lock the white keys to *Major*, *Natural Minor*, *Minor/Major Pentatonic*, *Blues*, *Dorian*, *Phrygian*, *Lydian*, *Mixolydian*, *Harmonic/Melodic Minor*, *Phrygian Dominant*, *Hirajoshi*, or *Whole Tone* in any root key (`KNOB 1`).
+- **Visualizers**: By pressing **HOME**, you can cycle through the various visualizers offered by Adrift (oscilloscope, stereo stage, etc.). On each visualizer, use the knobs to zoom, set the gain, or set visualizer-specific options.
 
 | Preset Browser (`P1–24 · U1–24`) | 16-Scale Browser | Save User Preset (`U1–U24`) | `HOME` Spectrum & Waterfall |
 | :---: | :---: | :---: | :---: |

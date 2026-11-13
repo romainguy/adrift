@@ -7,6 +7,7 @@ int g_failures = 0;
 
 int main(int argc, char **argv) {
     const char *wav_dir = (argc > 1) ? argv[1] : NULL;
+    setvbuf(stdout, NULL, _IONBF, 0);
     printf("=== Adrift DSP & MIDI Automated Verification Suite ===\n");
 
     test_micro_acb_exciter();

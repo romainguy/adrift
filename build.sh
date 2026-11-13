@@ -3,14 +3,15 @@
 # Unified build, test & emulation entry point for Adrift (M-VAVE FM-1 custom firmware).
 #
 # Subcommands:
-#   ./build.sh test        Compile & run automated DSP/MIDI unit & WAV verification suite
-#   ./build.sh sdl         Compile native macOS SDL2 + CoreMIDI fast-iteration simulator (<1s)
-#   ./build.sh screenshots Render PNG screenshots of all UI screens into screenshots/
-#   ./build.sh fw          Compile flashable hardware firmware package (build/fw/adrift.fwsc)
-#   ./build.sh web         Build static website, WASM synth emulator & firmware installer (build/web/)
-#   ./build.sh emu         Launch fm1-live running build/fw/adrift.fwsc with live audio & MIDI
-#   ./build.sh bench       Run strict 240 MHz & 360 MHz pi32v2 cycle-accurate CPU benchmark
-#   ./build.sh all         Build test + sdl + fw
+#   ./build.sh test              Compile & run automated DSP/MIDI unit & WAV verification suite
+#   ./build.sh sdl               Compile native macOS SDL2 + CoreMIDI fast-iteration simulator (<1s)
+#   ./build.sh screenshots       Render PNG screenshots of all UI screens into screenshots/
+#   ./build.sh fw                Compile flashable hardware firmware package (build/fw/adrift.fwsc)
+#   ./build.sh release [ver]     Compile release firmware directly via $JIELI_TOOLCHAIN & $AC79_SDK (no Docker)
+#   ./build.sh web               Build static website, WASM synth emulator & firmware installer (build/web/)
+#   ./build.sh emu               Launch fm1-live running build/fw/adrift.fwsc with live audio & MIDI
+#   ./build.sh bench             Run strict 240 MHz & 360 MHz pi32v2 cycle-accurate CPU benchmark
+#   ./build.sh all               Build test + sdl + fw
 
 set -e
 
@@ -59,7 +60,34 @@ build_test() {
     OUT="$ROOT/build/test"
     OBJ_DIR="$OUT/obj"
     mkdir -p "$OBJ_DIR"
-    SAN_FLAGS="${ADRIFT_SAN_FLAGS:--fsanitize=address,undefined}"
+
+    if [ -n "${HOST_CC:-}" ]; then
+        HCC="$HOST_CC"
+    elif command -v clang >/dev/null 2>&1; then
+        HCC="clang"
+    else
+        HCC="cc"
+    fi
+
+    if [ "${ADRIFT_SAN_FLAGS+set}" = "set" ]; then
+        SAN_FLAGS="$ADRIFT_SAN_FLAGS"
+    else
+        printf 'int main(void) { return 0; }\n' > "$OBJ_DIR/.san_probe.c"
+        if "$HCC" -fsanitize=address,undefined "$OBJ_DIR/.san_probe.c" -o "$OBJ_DIR/.san_probe" >/dev/null 2>&1 && \
+           ASAN_OPTIONS="${ASAN_OPTIONS:-detect_leaks=0}" "$OBJ_DIR/.san_probe" >/dev/null 2>&1; then
+            SAN_FLAGS="-fsanitize=address,undefined"
+        else
+            SAN_FLAGS=""
+        fi
+        rm -f "$OBJ_DIR/.san_probe.c" "$OBJ_DIR/.san_probe"
+    fi
+
+    TEST_CFG="$HCC|$SAN_FLAGS|$(uname -s)-$(uname -m)"
+    if [ ! -f "$OBJ_DIR/.build_cfg" ] || [ "$(cat "$OBJ_DIR/.build_cfg" 2>/dev/null)" != "$TEST_CFG" ]; then
+        rm -f "$OBJ_DIR"/*.o
+        printf '%s\n' "$TEST_CFG" > "$OBJ_DIR/.build_cfg"
+    fi
+
     NEWEST_HDR="$(ls -t "$ROOT"/src/*.h "$ROOT"/src/*/*.h "$ROOT"/tests/*.h 2>/dev/null | head -n 1)"
     OBJS=""
     PIDS=""
@@ -69,7 +97,7 @@ build_test() {
         obj="$OBJ_DIR/$(echo "$m" | tr '/' '_').o"
         OBJS="$OBJS $obj"
         if need_host_build "$src" "$obj"; then
-            clang $HOST_WARN -O2 -g $SAN_FLAGS -I"$ROOT/src" -c "$src" -o "$obj" &
+            "$HCC" $HOST_WARN -O2 -g $SAN_FLAGS -I"$ROOT/src" -c "$src" -o "$obj" &
             PIDS="$PIDS $!"
         fi
     done
@@ -79,7 +107,7 @@ build_test() {
         obj="$OBJ_DIR/test_${t}.o"
         OBJS="$OBJS $obj"
         if need_host_build "$src" "$obj"; then
-            clang $HOST_WARN -O2 -g $SAN_FLAGS -I"$ROOT/src" -c "$src" -o "$obj" &
+            "$HCC" $HOST_WARN -O2 -g $SAN_FLAGS -I"$ROOT/src" -c "$src" -o "$obj" &
             PIDS="$PIDS $!"
         fi
     done
@@ -88,8 +116,8 @@ build_test() {
         wait "$pid"
     done
 
-    clang $HOST_WARN -O2 -g $SAN_FLAGS $OBJS -lm -o "$OUT/adrift_tests"
-    "$OUT/adrift_tests" "$OUT"
+    "$HCC" $HOST_WARN -O2 -g $SAN_FLAGS $OBJS -lm -o "$OUT/adrift_tests"
+    ASAN_OPTIONS="${ASAN_OPTIONS:-detect_leaks=0}" "$OUT/adrift_tests" "$OUT"
 }
 
 build_sdl() {
@@ -291,6 +319,155 @@ build_fw() {
     echo "  [fwsc]   Ready: $OUT/adrift.fwsc"
 }
 
+ensure_bsp_submodule() {
+    if [ ! -f "$BSP/tools/fm1pkg.py" ]; then
+        echo "==> Initializing external/felucca-bsp submodule..."
+        git -C "$ROOT" submodule update --init external/felucca-bsp
+    fi
+}
+
+verify_sdk_blobs() {
+    SDK_CHECK_DIR="$1"
+    python3 - "$SDK_CHECK_DIR" <<'PY'
+import hashlib, pathlib, sys
+
+sdk = pathlib.Path(sys.argv[1])
+expected = {
+    "cpu/wl82/tools/uboot.boot": "4e3b4c220dc96641cb5a723f41e68ce41d5261ae9434bb33fbd7f2c59976ded4",
+    "cpu/wl82/tools/cfg_tool.bin": "276579954f076886a6a7694f65dc71c034a63a2c204b76749065c0ac7b010d1b",
+    "cpu/wl82/tools/cfg/eq_cfg_hw.bin": "41167491bffed4651750719c973d2758adeb9021a5670d02d6a53c85ed80ea7d",
+}
+for rel, sha in expected.items():
+    p = sdk / rel
+    if not p.is_file():
+        raise SystemExit(f"ERROR: Missing AC79 SDK file: {p}")
+    actual = hashlib.sha256(p.read_bytes()).hexdigest()
+    if actual != sha:
+        raise SystemExit(f"ERROR: SHA-256 mismatch for {p} ({actual} != {sha})")
+PY
+}
+
+build_release() {
+    REL_VER="${1:-}"
+    TC="${JIELI_TOOLCHAIN:-$TC_HOST}"
+    SDK="${AC79_SDK:-$SDK_HOST}"
+
+    if [ ! -x "$TC/pi32v2/bin/clang" ] || [ ! -x "$TC/pi32v2/bin/ld" ]; then
+        echo "ERROR: JIELI_TOOLCHAIN ('$TC') does not contain pi32v2/bin/{clang,ld}." >&2
+        echo "       Set JIELI_TOOLCHAIN to the JieLi Linux toolchain directory." >&2
+        exit 1
+    fi
+    if [ ! -d "$SDK" ]; then
+        echo "ERROR: AC79_SDK ('$SDK') not found. Set AC79_SDK to the JieLi AC79 SDK directory." >&2
+        exit 1
+    fi
+
+    ensure_bsp_submodule
+    verify_sdk_blobs "$SDK"
+
+    OUT="$ROOT/build/release"
+    rm -rf "$OUT"
+    mkdir -p "$OUT/ldr" "$OUT/obj"
+
+    if [ -n "$REL_VER" ]; then
+        VER_SAFE="$(printf '%s' "$REL_VER" | tr '/ ' '--')"
+        PKG_OUT="$OUT/adrift-${VER_SAFE}.fwsc"
+    else
+        PKG_OUT="$OUT/adrift.fwsc"
+    fi
+
+    echo "==> Building release firmware directly via JIELI_TOOLCHAIN & AC79_SDK -> $(basename "$PKG_OUT")..."
+
+    CC_BIN="$TC/pi32v2/bin/clang"
+    LD_BIN="$TC/pi32v2/bin/ld"
+    OBJCOPY_BIN="$TC/common/bin/objcopy"
+    OBJDUMP_BIN="$TC/common/bin/objdump"
+    LIBCRT="$TC/pi32v2/lib/r3/libcompiler_rt.a"
+
+    rx() {
+        for _try in 1 2 3; do
+            "$@" && return 0
+            sleep 1
+        done
+        return 1
+    }
+
+    # 1. Compile & wrap felucca-bsp RAM update loader -> ota.bin
+    echo "==> Building OTA loader..."
+    rx "$CC_BIN" -target pi32v2 -c "$BSP/loader/crt0_ldr.S" -o "$OUT/ldr/crt0_ldr.o"
+    rx "$CC_BIN" -target pi32v2 -Os -ffunction-sections -fno-builtin -Wall -Wno-unused-function \
+        -I"$BSP/chip" -I"$BSP/boards/fm1" \
+        -c "$BSP/loader/loader.c" -o "$OUT/ldr/loader.o"
+    rx "$LD_BIN" --gc-sections -e _start -T "$BSP/loader/loader.ld" \
+        "$OUT/ldr/crt0_ldr.o" "$OUT/ldr/loader.o" -o "$OUT/ldr/loader.elf"
+    rx "$OBJCOPY_BIN" -O binary -j .text "$OUT/ldr/loader.elf" "$OUT/ldr/loader.bin"
+    python3 "$ROOT/tools/fw_pack.py" wrap-loader "$OUT/ldr/loader.bin" "$OUT/ota.bin"
+
+    # 2. Compile & link Adrift firmware
+    FW_WARN="-std=c99 -Wall -Wextra -Werror -Wno-unused-function -Wno-unused-parameter"
+    FW_COMMON="-mcpu=r3 -ffunction-sections -fdata-sections -fno-builtin $FW_WARN -I$ROOT/src"
+
+    rx "$CC_BIN" -target pi32v2 -c "$BSP/chip/crt0.S" -o "$OUT/obj/crt0.o"
+    rx "$CC_BIN" -target pi32v2 -c "$BSP/chip/fm1_vec.S" -o "$OUT/obj/fm1_vec.o"
+    rx "$CC_BIN" -target pi32v2 -c "$BSP/chip/fm1_isr.S" -o "$OUT/obj/fm1_isr.o"
+    rx "$CC_BIN" -target pi32v2 -c "$BSP/chip/fm1_cpu1.S" -o "$OUT/obj/fm1_cpu1.o"
+
+    for f in dsp/dsp_tables dsp/exciter dsp/envelope dsp/filters dsp/bbd dsp/fx synth/synth synth/voice synth/arp synth/midi ui/ui ui/ui_draw ui/ui_panes; do
+        o="$(echo "$f" | tr '/' '_')"
+        rx "$CC_BIN" -target pi32v2 -O2 $FW_COMMON -c "$ROOT/src/${f}.c" -o "$OUT/obj/${o}.o"
+    done
+
+    for f in synth/presets synth/preset_store ui/ui_params app; do
+        o="$(echo "$f" | tr '/' '_')"
+        rx "$CC_BIN" -target pi32v2 -Os $FW_COMMON -c "$ROOT/src/${f}.c" -o "$OUT/obj/${o}.o"
+    done
+
+    rx "$CC_BIN" -target pi32v2 -Os $FW_COMMON \
+        -I"$BSP/chip" -I"$BSP/boards/fm1" \
+        -c "$ROOT/src/platform/platform_fm1.c" -o "$OUT/obj/platform_fm1.o"
+
+    rx "$LD_BIN" --gc-sections -e _start -T "$ROOT/src/platform/app.ld" \
+        "$OUT/obj/crt0.o" "$OUT/obj/fm1_vec.o" "$OUT/obj/fm1_isr.o" "$OUT/obj/fm1_cpu1.o" \
+        "$OUT/obj/dsp_dsp_tables.o" "$OUT/obj/dsp_exciter.o" \
+        "$OUT/obj/dsp_envelope.o" "$OUT/obj/dsp_filters.o" \
+        "$OUT/obj/dsp_bbd.o" "$OUT/obj/dsp_fx.o" \
+        "$OUT/obj/synth_synth.o" "$OUT/obj/synth_presets.o" \
+        "$OUT/obj/synth_preset_store.o" \
+        "$OUT/obj/synth_voice.o" "$OUT/obj/synth_arp.o" \
+        "$OUT/obj/synth_midi.o" \
+        "$OUT/obj/ui_ui.o" "$OUT/obj/ui_ui_draw.o" \
+        "$OUT/obj/ui_ui_params.o" "$OUT/obj/ui_ui_panes.o" \
+        "$OUT/obj/app.o" "$OUT/obj/platform_fm1.o" \
+        "$LIBCRT" \
+        -o "$OUT/adrift.elf"
+
+    rx "$OBJCOPY_BIN" -O binary -j .text "$OUT/adrift.elf" "$OUT/text.bin"
+    rx "$OBJCOPY_BIN" -O binary -j .ram_text "$OUT/adrift.elf" "$OUT/ramtext.bin"
+    rx "$OBJCOPY_BIN" -O binary -j .data "$OUT/adrift.elf" "$OUT/data.bin"
+    rx "$OBJDUMP_BIN" -t "$OUT/adrift.elf" > "$OUT/syms.txt"
+    rx "$OBJDUMP_BIN" -d -mcpu=r3 "$OUT/adrift.elf" > "$OUT/dis.txt"
+    rx "$OBJDUMP_BIN" -d -mcpu=r3 -j .ram_text "$OUT/adrift.elf" > "$OUT/rt_dis.txt"
+
+    # 3. Verify pi32v2 hardware invariants & assemble release .fwsc
+    python3 "$ROOT/tools/fw_pack.py" pack-app \
+        "$OUT/text.bin" "$OUT/ramtext.bin" "$OUT/data.bin" \
+        "$OUT/syms.txt" "$OUT/dis.txt" "$OUT/rt_dis.txt" \
+        "$OUT/adrift.bin"
+
+    AC79_SDK="$SDK" python3 "$BSP/tools/fm1pkg.py" \
+        "$OUT/adrift.bin" "$OUT/ota.bin" "$PKG_OUT" --product FM-1_462
+
+    if [ -f "$BSP/LICENSES/Apache-2.0.txt" ]; then
+        cp "$BSP/LICENSES/Apache-2.0.txt" "$OUT/Apache-2.0.txt"
+    fi
+
+    # Clean intermediate build objects so build/release/ holds only release outputs
+    rm -rf "$OUT/ldr" "$OUT/obj" "$OUT/adrift.elf" "$OUT/text.bin" "$OUT/ramtext.bin" \
+        "$OUT/data.bin" "$OUT/syms.txt" "$OUT/dis.txt" "$OUT/rt_dis.txt" "$OUT/adrift.bin" "$OUT/ota.bin"
+
+    echo "  [release] Ready: $PKG_OUT"
+}
+
 build_web() {
     REBUILD_FW=0
     for arg in "$@"; do
@@ -423,20 +600,22 @@ CMD="${1:-all}"
 shift || true
 
 case "$CMD" in
-    test)        build_test ;;
-    sdl)         build_sdl ;;
-    screenshots) build_screenshots "$@" ;;
-    fw)          build_fw ;;
-    web)         build_web "$@" ;;
-    emu)         run_emu "$@" ;;
-    bench)       run_bench ;;
+    test)               build_test ;;
+    sdl)                build_sdl ;;
+    screenshots)        build_screenshots "$@" ;;
+    fw)                 ensure_bsp_submodule; build_fw ;;
+    release|--release)  build_release "$@" ;;
+    web)                build_web "$@" ;;
+    emu)                run_emu "$@" ;;
+    bench)              run_bench ;;
     all)
         build_test
         build_sdl
+        ensure_bsp_submodule
         build_fw
         ;;
     *)
-        echo "Usage: $0 {test|sdl|screenshots|fw|web|emu|bench|all}" >&2
+        echo "Usage: $0 {test|sdl|screenshots|fw|release|web|emu|bench|all}" >&2
         exit 1
         ;;
 esac

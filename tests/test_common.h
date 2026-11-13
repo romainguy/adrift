@@ -17,6 +17,10 @@
 
 #define FS_EXACT (24000000.0 / 544.0)
 
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
+
 extern int g_failures;
 
 #define CHECK(cond, fmt, ...)                                                       \

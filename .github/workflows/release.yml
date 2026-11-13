@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: MPL-2.0
+# Builds, tests, signs (SLSA provenance attestation), and publishes Adrift .fwsc releases
+# via The Firmware Hub's shared workflow (https://thefirmwarehub.com/kb/#sign).
+
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  build:
+    uses: zvenson/fm1-build/.github/workflows/build.yml@v1
+    permissions:
+      contents: write        # the release
+      id-token: write        # the signing certificate
+      attestations: write    # the attestation
+    with:
+      build: ./build.sh release "${GITHUB_REF_NAME#v}"
+      packages: build/release/*.fwsc
+      test: ./build.sh test

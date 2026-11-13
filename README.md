@@ -202,6 +202,18 @@ Adrift is a bare-metal dual-core C99 firmware for the M-VAVE FM-1's `JieLi AC791
 
 # 8. Build and publish the website to the gh-pages branch
 ./tools/deploy_gh_pages.sh
+
+# 9. Build release firmware directly from $JIELI_TOOLCHAIN & $AC79_SDK (used by CI / release.yml)
+./build.sh release 1.0.0
+```
+
+### Signed Releases & Provenance Verification
+
+Tagged releases (`git tag v1.0.0 && git push origin v1.0.0`) are built, tested, and cryptographically attested on GitHub Actions using [The Firmware Hub's shared build workflow](https://thefirmwarehub.com/kb/#sign) ([`.github/workflows/release.yml`](.github/workflows/release.yml)). Anyone can verify a downloaded release `.fwsc` against the source repository with the GitHub CLI:
+
+```sh
+gh attestation verify adrift-1.0.0.fwsc --repo romainguy/adrift \
+  --signer-workflow zvenson/fm1-build/.github/workflows/build.yml
 ```
 
 ## License

@@ -126,6 +126,12 @@ class AdriftProcessor extends AudioWorkletProcessor {
       case 'panic':
         this.exports.adrift_web_panic();
         break;
+      case 'srAction':
+        if (this.exports.adrift_web_sr_action) {
+          this.exports.adrift_web_sr_action(msg.action & 0xff);
+          this._emitUiFrame();
+        }
+        break;
       case 'mute':
         this.muted = Boolean(msg.muted);
         break;
@@ -214,6 +220,7 @@ class AdriftProcessor extends AudioWorkletProcessor {
         activeGroup: this.exports.adrift_web_active_group() >>> 0,
         activePreset: this.exports.adrift_web_active_preset() >>> 0,
         inSaveMenu: this.exports.adrift_web_in_save_menu() !== 0,
+        srEnabled: this.exports.adrift_web_sr_enabled ? this.exports.adrift_web_sr_enabled() !== 0 : false,
         bootFrame,
       },
       [rgbaCopy.buffer]

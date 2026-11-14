@@ -57,6 +57,7 @@
           <li><a href="#install">Install</a></li>
           <li><a href="#sound">How It Sounds</a></li>
           <li><a href="#controls">Controls &amp; Screens</a></li>
+          <li><a href="#accessibility">Screen Reader</a></li>
           <li><a href="#presets">24 Presets</a></li>
           <li><a href="#midi">MIDI Guide</a></li>
         </ul>
@@ -118,6 +119,18 @@
               <button type="button" id="btn-panic" class="btn btn-secondary" title="Silence all ringing voices and feedback">
                 Panic (All Notes Off)
               </button>
+              <button type="button" id="btn-sr-toggle" class="btn btn-secondary" aria-pressed="false">
+                <svg class="sr-btn-icon" viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
+                  <path d="M2 6h2.6L8 3.2v9.6L4.6 10H2z" fill="currentColor"/>
+                  <path class="sr-icon-waves" d="M10.4 5.3a4.2 4.2 0 0 1 0 5.4M12.6 3.5a6.8 6.8 0 0 1 0 9" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                </svg>
+                <span>Screen Reader</span>
+              </button>
+              <div id="sr-extra-controls" class="sr-extra-controls" role="group" aria-label="Screen reader actions" hidden>
+                <button type="button" id="btn-sr-where" class="btn btn-ghost">Where Am I?</button>
+                <button type="button" id="btn-sr-slower" class="btn btn-ghost">Slower</button>
+                <button type="button" id="btn-sr-faster" class="btn btn-ghost">Faster</button>
+              </div>
               <label class="toggle-label">
                 <input type="checkbox" id="chk-qwerty" checked>
                 <span>Show <kbd>Z</kbd>–<kbd>M</kbd> Key Labels</span>
@@ -412,6 +425,179 @@
       </div>
     </section>
 
+    <!-- 4B. BUILT-IN SCREEN READER & TACTILE KEY COMBOS -->
+    <section id="accessibility">
+      <div class="container">
+        <div class="section-header">
+          <span class="eyebrow">Eyes-Free Hardware Accessibility</span>
+          <h2>Built-In Screen Reader &amp; Tactile Key Combos</h2>
+          <p>
+            Adrift includes an on-device <strong>speech synthesizer</strong> so blind and low-vision musicians can play, shape patches from scratch, browse presets and scales, and name user patches completely eyes-free — with no external app or computer needed.
+          </p>
+          <div class="sr-cta-row">
+            <button type="button" id="btn-try-sr" class="btn btn-secondary">
+              Try Screen Reader in Browser Emulator
+            </button>
+          </div>
+        </div>
+
+        <figure class="sr-keyboard-figure">
+          <svg role="img" aria-labelledby="sr-kbd-svg-title" viewBox="0 0 920 228" class="sr-kbd-svg">
+            <title id="sr-kbd-svg-title">M-VAVE FM-1 27-key panel showing 11 raised black keys grouped 3, 2, 3, 2, 1 from left to right: hold Black Key 11 on the far right and press Black Keys 4 or 5 for speech speed down or up, Black Key 6 to toggle speech on or off, or Black Key 7 for Where Am I</title>
+            <rect x="1" y="1" width="918" height="226" rx="16" fill="#0B0F18" stroke="rgba(238,242,248,0.14)"/>
+
+            <!-- Group tactile labels along top -->
+            <g font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11" text-anchor="middle">
+              <text x="136" y="28" fill="#8492AD">Group of 3 (1–3)</text>
+              <line x1="64" y1="36" x2="208" y2="36" stroke="rgba(238,242,248,0.18)"/>
+
+              <text x="325" y="28" fill="#38D8F8" font-weight="700">Speed − / + (4–5)</text>
+              <line x1="278" y1="36" x2="372" y2="36" stroke="#38D8F8" stroke-width="1.5"/>
+
+              <text x="514" y="28" fill="#40E88C" font-weight="700">Toggle &amp; Where (6–7)</text>
+              <line x1="440" y1="36" x2="588" y2="36" stroke="#40E88C" stroke-width="1.5"/>
+
+              <text x="703" y="28" fill="#8492AD">Group of 2 (9–10)</text>
+              <line x1="656" y1="36" x2="750" y2="36" stroke="rgba(238,242,248,0.18)"/>
+
+              <text x="838" y="28" fill="#F8BE30" font-weight="700">Hold Modifier (11)</text>
+              <line x1="806" y1="36" x2="870" y2="36" stroke="#F8BE30" stroke-width="2"/>
+            </g>
+
+            <!-- 16 White Keys (F3 .. G5) -->
+            <g fill="#1D2538" stroke="rgba(238,242,248,0.16)">
+              <rect x="33" y="138" width="44" height="70" rx="8"/>
+              <rect x="87" y="138" width="44" height="70" rx="8"/>
+              <rect x="141" y="138" width="44" height="70" rx="8"/>
+              <rect x="195" y="138" width="44" height="70" rx="8"/>
+              <rect x="249" y="138" width="44" height="70" rx="8"/>
+              <rect x="303" y="138" width="44" height="70" rx="8"/>
+              <rect x="357" y="138" width="44" height="70" rx="8"/>
+              <rect x="411" y="138" width="44" height="70" rx="8"/>
+              <rect x="465" y="138" width="44" height="70" rx="8"/>
+              <rect x="519" y="138" width="44" height="70" rx="8"/>
+              <rect x="573" y="138" width="44" height="70" rx="8"/>
+              <rect x="627" y="138" width="44" height="70" rx="8"/>
+              <rect x="681" y="138" width="44" height="70" rx="8"/>
+              <rect x="735" y="138" width="44" height="70" rx="8"/>
+              <rect x="789" y="138" width="44" height="70" rx="8"/>
+              <rect x="843" y="138" width="44" height="70" rx="8"/>
+            </g>
+            <g font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="10.5" fill="#8492AD" text-anchor="middle">
+              <text x="55" y="196">F3</text>
+              <text x="271" y="196">C4</text>
+              <text x="433" y="196">F4</text>
+              <text x="649" y="196">C5</text>
+              <text x="865" y="196">G5</text>
+            </g>
+
+            <!-- Inactive Raised Black Keys (1, 2, 3, 8, 9, 10) -->
+            <g fill="#121826" stroke="rgba(238,242,248,0.22)">
+              <rect x="62" y="52" width="40" height="72" rx="8"/>
+              <rect x="116" y="52" width="40" height="72" rx="8"/>
+              <rect x="170" y="52" width="40" height="72" rx="8"/>
+              <rect x="548" y="52" width="40" height="72" rx="8"/>
+              <rect x="656" y="52" width="40" height="72" rx="8"/>
+              <rect x="710" y="52" width="40" height="72" rx="8"/>
+            </g>
+            <g font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11" fill="#8492AD" text-anchor="middle">
+              <text x="82" y="92">1</text>
+              <text x="136" y="92">2</text>
+              <text x="190" y="92">3</text>
+              <text x="568" y="92">8</text>
+              <text x="676" y="92">9</text>
+              <text x="730" y="92">10</text>
+            </g>
+
+            <!-- Active Screen Reader Combo Keys: 4 & 5 (Speed -/+), 6 (Toggle), 7 (Where), 11 (Hold Modifier) -->
+            <rect x="278" y="50" width="40" height="74" rx="8" fill="rgba(56,216,248,0.18)" stroke="#38D8F8" stroke-width="2"/>
+            <rect x="332" y="50" width="40" height="74" rx="8" fill="rgba(56,216,248,0.18)" stroke="#38D8F8" stroke-width="2"/>
+            <rect x="440" y="50" width="40" height="74" rx="8" fill="rgba(64,232,140,0.20)" stroke="#40E88C" stroke-width="2"/>
+            <rect x="494" y="50" width="40" height="74" rx="8" fill="rgba(168,132,255,0.22)" stroke="#A884FF" stroke-width="2"/>
+            <rect x="818" y="48" width="40" height="76" rx="8" fill="rgba(248,190,48,0.24)" stroke="#F8BE30" stroke-width="2.5"/>
+
+            <g font-family="ui-monospace, SFMono-Regular, Menlo, monospace" text-anchor="middle" font-weight="700">
+              <text x="298" y="80" font-size="12" fill="#EEF2F8">4</text>
+              <text x="298" y="106" font-size="9.5" fill="#38D8F8">SPD−</text>
+
+              <text x="352" y="80" font-size="12" fill="#EEF2F8">5</text>
+              <text x="352" y="106" font-size="9.5" fill="#38D8F8">SPD+</text>
+
+              <text x="460" y="80" font-size="12" fill="#EEF2F8">6</text>
+              <text x="460" y="106" font-size="9" fill="#40E88C">ON/OFF</text>
+
+              <text x="514" y="80" font-size="12" fill="#EEF2F8">7</text>
+              <text x="514" y="106" font-size="9" fill="#A884FF">WHERE</text>
+
+              <text x="838" y="80" font-size="12.5" fill="#F8BE30">11</text>
+              <text x="838" y="106" font-size="9.5" fill="#F8BE30">HOLD</text>
+            </g>
+          </svg>
+          <figcaption class="sr-kbd-caption">
+            <strong>Finding the keys by touch:</strong> Along the raised upper row, the FM-1’s 11 black keys form tactile groups of <code>3 – 2 – 3 – 2 – 1</code> from left to right. <strong>Black Key 11</strong> (<code>F#5</code>) sits all by itself at the far right — hold it down with your right hand and tap <strong>Black Key 6</strong>, <strong>7</strong>, <strong>4</strong>, or <strong>5</strong> with your left.
+          </figcaption>
+        </figure>
+
+        <div tabindex="0" role="region" aria-labelledby="sr-combos-caption" class="sr-table-wrapper">
+          <table class="sr-combos-table">
+            <caption id="sr-combos-caption">M-VAVE FM-1 Hardware Screen Reader Key Combinations (Hold Black Key 11 + Press)</caption>
+            <thead>
+              <tr>
+                <th scope="col">Key Combo</th>
+                <th scope="col">How to Find by Touch</th>
+                <th scope="col">What It Does</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <th scope="row"><kbd>Black Key 11</kbd> + <kbd>Black Key 6</kbd> <span class="sr-note-sub">(F#5 + F#4)</span></th>
+                <td>Lone rightmost black key + <strong>1st key in middle group of 3</strong></td>
+                <td><strong>Toggle Screen Reader On / Off</strong> — announces <em>“Screen reader on”</em> followed by your current screen, or <em>“Screen reader off”</em>.</td>
+              </tr>
+              <tr>
+                <th scope="row"><kbd>Black Key 11</kbd> + <kbd>Black Key 7</kbd> <span class="sr-note-sub">(F#5 + G#4)</span></th>
+                <td>Lone rightmost black key + <strong>middle key in middle group of 3</strong></td>
+                <td><strong>Where Am I? (<code>WHERE</code>)</strong> — immediately reads out your current screen or modal, active Voice Group (<code>G1</code>–<code>G6</code>), voice count, preset name, and all 4 parameter names and values.</td>
+              </tr>
+              <tr>
+                <th scope="row"><kbd>Black Key 11</kbd> + <kbd>Black Key 4</kbd> <span class="sr-note-sub">(F#5 + C#4)</span></th>
+                <td>Lone rightmost black key + <strong>1st key in first group of 2</strong></td>
+                <td><strong>Decrease Speech Speed</strong> — steps down toward <code>Speed 1</code> (slowest; default is <code>Speed 3</code>).</td>
+              </tr>
+              <tr>
+                <th scope="row"><kbd>Black Key 11</kbd> + <kbd>Black Key 5</kbd> <span class="sr-note-sub">(F#5 + D#4)</span></th>
+                <td>Lone rightmost black key + <strong>2nd key in first group of 2</strong></td>
+                <td><strong>Increase Speech Speed</strong> — steps up toward <code>Speed 5</code> (fastest) for brisk navigation once you know the pages.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="midi-cards-grid">
+          <article class="midi-info-card">
+            <h3>Headphone &amp; Line-Out Only</h3>
+            <p>
+              Synthesized speech goes <strong>strictly to the 3.5 mm headphone / line-out jack</strong> and is never sent to USB audio out — so you can record clean synth audio over USB into your DAW or phone while hearing spoken guidance in your headphones, with smooth <code>−6 dB</code> synth ducking while Adrift speaks.
+            </p>
+          </article>
+
+          <article class="midi-info-card">
+            <h3>Plain English, Zero Stutter</h3>
+            <p>
+              Compact screen labels expand into natural words and musical units (<em>“cutoff 1 point 2 kilohertz”</em>, <em>“dotted eighth”</em>). Knob turns wait <code>~120 ms</code> to settle (<code>~200 ms</code> for page flips) so fast sweeps never stutter, while warnings are always heard in full.
+            </p>
+          </article>
+
+          <article class="midi-info-card">
+            <h3>Unimpeded Two-Handed Play</h3>
+            <p>
+              When speech is off, only <code>Black Key 11 + Black Key 6</code> listens for the toggle chord so chords using <code>F#5</code> play normally. Triggering any combo automatically silences <code>F#5</code>, and you can keep holding <code>Black Key 11</code> while tapping speed or <code>WHERE</code> repeatedly.
+            </p>
+          </article>
+        </div>
+      </div>
+    </section>
+
     <!-- 5. 24 FACTORY PRESETS GALLERY -->
     <section id="presets">
       <div class="container">
@@ -548,6 +734,9 @@
 
         <dt><kbd>8</kbd> (or <kbd>⌘S</kbd> / <kbd>Ctrl+S</kbd>)</dt>
         <dd>Open <strong>SAVE PRESET</strong> — type your patch name directly on your keyboard and press <kbd>Enter</kbd> to save!</dd>
+
+        <dt><kbd>F1</kbd> · <kbd>F2</kbd> · <kbd>F3</kbd>/<kbd>F4</kbd></dt>
+        <dd>Built-in Screen Reader: toggle speech (<kbd>F1</kbd>), read full current screen (<kbd>F2</kbd>), or adjust speech speed down/up (<kbd>F3</kbd> / <kbd>F4</kbd>). On touch screens, hold <strong>Black Key 11</strong> + <strong>6 / 7 / 4 / 5</strong> just like hardware.</dd>
 
         <dt>Knobs &amp; Badges</dt>
         <dd>Drag any knob vertically (hold <kbd>Shift</kbd> for fine tune), scroll your mouse wheel over a knob, or click badges right on the screen.</dd>

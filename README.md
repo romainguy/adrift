@@ -9,6 +9,7 @@
 - **Try Before Flashing**: Play all 24 factory presets directly on the **[Adrift Website](https://romainguy.github.io/adrift/)** using your mouse, touch screen, computer keyboard, or USB MIDI controller.
 - **One-Click USB Install**: Flash Adrift straight onto your M-VAVE FM-1 from Chrome, Edge, Brave, or Opera in ~15 seconds — no command line or drivers required.
 - **100% Reversible**: Restore the official M-VAVE factory firmware (`FM-1.fwsc`) at any time from the same browser installer.
+- **Built-In Screen Reader**: On-device speech synthesis makes every screen, knob, preset, scale, and save menu accessible to blind and low-vision musicians, routed strictly to headphones/line-out, never USB audio out.
 
 | Exciter (`EXC`) | BBD Resonator (`BBD`) | 16-Voice Soundstage (`HOME`) | Shimmer Reverb (`FX`) |
 | :---: | :---: | :---: | :---: |
@@ -110,6 +111,7 @@ Because Adrift repurposes the M-VAVE FM-1's physical panel for BBD physical mode
 | **`SAVE` Button** | **Save User Preset (`U1`–`U24`)** | Saves all 6 Voice Groups, Master FX, and a custom 12-character patch name to permanent flash memory (`OCT+` saves, `OCT-` cancels). |
 | **`PLAY` Button** | **Panic (All Sound Off)** | Immediately silences all held notes, drones, BBD feedback loops, and reverb/delay tails. |
 | **`OCT -` / `OCT +`** | **Octave / Cancel & Confirm** | Shifts the 27-key keyboard down or up by octaves — or acts as **Cancel (`OCT-`)** and **Confirm (`OCT+`)** inside the Preset, Scale, and Save screens. |
+| **`Black Key 11` + `4`–`7`** | **Built-In Screen Reader** | Hold the lone rightmost black key (**Black Key 11**, `F#5`) and press **Black Key 6** to toggle speech, **Black Key 7** for full screen summary (`WHERE`), or **Black Keys 4 / 5** for speech speed down/up. See [Accessibility & Screen Reader](#accessibility--screen-reader). |
 
 ---
 
@@ -141,6 +143,39 @@ Adrift's 16 voices are shared across **6 independent Voice Groups (`G1`–`G6`)*
 | Preset Browser (`P1–24 · U1–24`) | 16-Scale Browser | Save User Preset (`U1–U24`) | `HOME` Spectrum & Waterfall |
 | :---: | :---: | :---: | :---: |
 | <img src="screenshots/27_presets_browser.png" width="185" alt="Presets Browser"> | <img src="screenshots/28_scales_browser.png" width="185" alt="Scales Browser"> | <img src="screenshots/29_preset_save.png" width="185" alt="Save User Preset Modal"> | <img src="screenshots/03_home_spec.png" width="185" alt="Spectrum and Waterfall Visualizer"> |
+
+---
+
+## Accessibility & Screen Reader
+
+Adrift includes a built-in speech synthesizer and screen reader so blind and visually impaired musicians can play, design patches from scratch, browse presets and scales, and name/save user patches completely eyes-free. No phone, computer, or external app required.
+
+### Finding the Keys by Touch
+
+The M-VAVE FM-1's 27-key keyboard (`F3` to `G5`) has **16 white keys** along the bottom row and **11 raised black keys** along the upper row, numbered **Black Key 1** (far left) through **Black Key 11** (far right) in tactile groups of **`3 – 2 – 3 – 2 – 1`**:
+
+- **Black Keys `4`, `5`** (`C#4, D#4`) — first group of 2 *(speech speed down / up)*
+- **Black Keys `6`, `7`, `8`** (`F#4, G#4, A#4`) — middle group of 3 *(toggle speech / `WHERE` summary)*
+- **Black Key `11`** (`F#5`) — the **lone single black key at the far right**, used as the Screen Reader modifier key
+
+### Screen Reader Key Combos
+
+Hold **Black Key 11** (`F#5`, the lone rightmost black key) and press one of the black keys below:
+
+| Key Combo (Hold + Press) | Tactile Position on Raised Black Keys | What It Does |
+| :--- | :--- | :--- |
+| **Hold `Black Key 11` + Press `Black Key 6`** | Lone rightmost black key (`F#5`) + **1st key in middle group of 3** (`F#4`) | **Toggle Screen Reader On / Off** — announces `"Screen reader on"` followed by your current screen, or `"Screen reader off"`. |
+| **Hold `Black Key 11` + Press `Black Key 7`** | Lone rightmost black key (`F#5`) + **middle key in middle group of 3** (`G#4`) | **Where Am I? (`WHERE`)** — immediately reads out your current screen or menu, active Voice Group (`G1`–`G6`), voice count, preset name, and all 4 parameter names and values on the page. |
+| **Hold `Black Key 11` + Press `Black Key 4`** | Lone rightmost black key (`F#5`) + **1st key in first group of 2** (`C#4`) | **Decrease Speech Speed** (`Speed 1` slowest to `Speed 5` fastest; default `Speed 3`). |
+| **Hold `Black Key 11` + Press `Black Key 5`** | Lone rightmost black key (`F#5`) + **2nd key in first group of 2** (`D#4`) | **Increase Speech Speed** (`Speed 1` to `Speed 5`). |
+
+### How Speech Works in Studio & Live Setups
+
+- **Headphone / Line-Out Only**: Speech is mixed **exclusively into the 3.5 mm headphone / line-out jack** and is **never** sent to USB audio out. You can record clean synth audio over USB into a DAW or phone while hearing full spoken feedback in your headphones.
+- **Automatic Synth Ducking**: Whenever Adrift speaks, synth audio in the headphone output gently ducks by `-6 dB` and recovers smoothly afterward so spoken values remain clear over sustained pads, drones, and self-oscillating resonators.
+- **Zero Interference with Two-Handed Chords**: While the screen reader is off, only `Black Key 11 + Black Key 6` is active so normal chords using `F#5` play unimpeded. Pressing any screen-reader combo automatically silences `F#5`, and you can keep holding `Black Key 11` while tapping speed or `WHERE` keys repeatedly.
+- **Full Words & Settled Readouts**: Every abbreviation on screen is expanded into plain spoken English and musical units (e.g., `"cutoff 1 point 2 kilohertz"`, `"feedback amount 88 percent"`, `"dotted eighth"`).
+- **Try It in the Browser**: You can also test Adrift's built-in screen reader live on the **[Adrift Website](https://romainguy.github.io/adrift/#accessibility)** using the **Screen Reader** button in the emulator toolbar, multi-touch black-key combos, or computer keys **`F1`–`F4`**.
 
 ---
 
@@ -215,10 +250,10 @@ Adrift is a bare-metal dual-core C99 firmware for the M-VAVE FM-1's `JieLi AC791
 # 1. One-time environment verification / setup (macOS Apple Silicon)
 ./tools/setup_env.sh
 
-# 2. Run automated DSP, MIDI, UI & User Preset verification suite
+# 2. Run automated DSP, MIDI, UI, User Preset & Screen Reader verification + speech audit suite
 ./build.sh test
 
-# 3. Build & launch fast-iteration native macOS SDL2 + CoreMIDI simulator (<1s build)
+# 3. Build & launch fast-iteration native macOS SDL2 + CoreMIDI simulator (<1s build; F1–F4 control Screen Reader)
 ./build.sh sdl
 ./build/sdl/adrift
 

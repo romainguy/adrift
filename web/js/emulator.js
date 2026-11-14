@@ -75,6 +75,7 @@ export class AdriftEmulator {
     this.ready = false;
     this.muted = false;
     this.inSaveMenu = false;
+    this.srEnabled = false;
     this.activePreset = 0;
     this.activeGroup = 0;
     this.pendingWorkletMsgs = [];
@@ -277,9 +278,14 @@ export class AdriftEmulator {
           this.inSaveMenu = msg.inSaveMenu;
           const prevPreset = this.activePreset;
           const prevGroup = this.activeGroup;
+          const prevSr = this.srEnabled;
           this.activePreset = msg.activePreset;
           this.activeGroup = msg.activeGroup;
+          this.srEnabled = Boolean(msg.srEnabled);
           this.panel.updateFromWorklet(msg);
+          if (prevSr !== this.srEnabled && this.cb.onScreenReaderState) {
+            this.cb.onScreenReaderState(this.srEnabled);
+          }
           if ((prevPreset !== this.activePreset || prevGroup !== this.activeGroup) && this.cb.onStateChange) {
             this.cb.onStateChange({
               activePreset: this.activePreset,
@@ -336,6 +342,11 @@ export class AdriftEmulator {
   panic() {
     this.heldPianoCodes.clear();
     this._post({ type: 'panic' });
+  }
+
+  async triggerScreenReaderAction(action) {
+    await this.ensureStarted();
+    this._post({ type: 'srAction', action: action & 0xff });
   }
 
   toggleMute() {
@@ -480,6 +491,30 @@ export class AdriftEmulator {
         return;
       }
       if (e.altKey) return;
+
+      // Built-in Screen Reader shortcuts (F1 toggle, F2 where, F3/F4 speed down/up)
+      if (this.ready || document.activeElement === this.canvas) {
+        if (e.code === 'F1') {
+          e.preventDefault();
+          if (!e.repeat) this.triggerScreenReaderAction(0);
+          return;
+        }
+        if (e.code === 'F2') {
+          e.preventDefault();
+          if (!e.repeat) this.triggerScreenReaderAction(1);
+          return;
+        }
+        if (e.code === 'F3') {
+          e.preventDefault();
+          if (!e.repeat) this.triggerScreenReaderAction(2);
+          return;
+        }
+        if (e.code === 'F4') {
+          e.preventDefault();
+          if (!e.repeat) this.triggerScreenReaderAction(3);
+          return;
+        }
+      }
 
       // Direct QWERTY preset-name typing while inside SAVE modal
       if (this.inSaveMenu && this.ready) {

@@ -415,6 +415,7 @@ WASM_EXPORT void adrift_web_lcd_click(int32_t x, int32_t y, uint8_t right_btn) {
         int32_t cell = (x - 19) / 17;
         if (cell >= 0 && cell < 12) {
             ui->save_cursor = (uint8_t)cell;
+            adrift_sr_announce_save_cursor(adrift_app_get_screen_reader(), ui, false);
         }
         return;
     }
@@ -447,13 +448,15 @@ WASM_EXPORT void adrift_web_lcd_click(int32_t x, int32_t y, uint8_t right_btn) {
         int32_t col = (x - 9) / 37;
         if (col >= 0 && col < ADRIFT_MAX_GROUPS) {
             s->edit_group = (uint8_t)col;
+            adrift_sr_announce_group_select(adrift_app_get_screen_reader(), s);
         }
     }
 }
 
 WASM_EXPORT void adrift_web_load_preset(uint8_t preset_idx) {
-    adrift_synth_t *s  = adrift_app_get_synth();
-    adrift_ui_t    *ui = adrift_app_get_ui();
+    adrift_synth_t         *s  = adrift_app_get_synth();
+    adrift_ui_t            *ui = adrift_app_get_ui();
+    adrift_screen_reader_t *sr = adrift_app_get_screen_reader();
 
     adrift_ui_dismiss_boot(ui);
     ui->in_preset_menu   = false;
@@ -474,9 +477,13 @@ WASM_EXPORT void adrift_web_load_preset(uint8_t preset_idx) {
     adrift_synth_all_notes_off(s, true);
     adrift_synth_load_preset(s, preset_idx);
     ui->initialized = false;
+    if (preset_idx < (ADRIFT_USER_PRESET_BASE + ADRIFT_NUM_USER_PRESETS)) {
+        adrift_sr_announce_preset_confirm(sr, (uint8_t)(2u + preset_idx), false, 0u, 0u, false, 0u);
+    }
 }
 
 WASM_EXPORT void adrift_web_panic(void) {
+    adrift_screen_reader_t *sr = adrift_app_get_screen_reader();
     for (uint32_t k = 0u; k < 27u; k++) {
         g_key_note[k] = 0xFFu;
     }
@@ -486,6 +493,9 @@ WASM_EXPORT void adrift_web_panic(void) {
     g_sounding_keys = 0u;
     g_midi_len      = 0u;
     adrift_synth_all_notes_off(adrift_app_get_synth(), true);
+    if (sr->enabled) {
+        adrift_sr_say(sr, ADRIFT_SR_PRIO_NOW, ADRIFT_SR_CAT_ACTION, "All sound off.");
+    }
 }
 
 WASM_EXPORT void adrift_web_render_audio(uint32_t frames) {
@@ -613,5 +623,32 @@ WASM_EXPORT void adrift_web_set_boot_frame(uint8_t frame) {
         ui->boot_frame   = frame;
         ui->initialized  = false;
         g_web_boot_frame = frame;
+    }
+}
+
+WASM_EXPORT uint32_t adrift_web_sr_enabled(void) {
+    return adrift_app_get_screen_reader()->enabled ? 1u : 0u;
+}
+
+WASM_EXPORT void adrift_web_sr_action(uint8_t action) {
+    adrift_screen_reader_t *sr = adrift_app_get_screen_reader();
+    adrift_ui_t            *ui = adrift_app_get_ui();
+    const adrift_synth_t   *s  = adrift_app_get_synth();
+    adrift_ui_dismiss_boot(ui);
+    switch (action) {
+        case 0u:
+            adrift_sr_toggle(sr, ui, s);
+            break;
+        case 1u:
+            adrift_sr_speak_where(sr, ui, s);
+            break;
+        case 2u:
+            adrift_sr_adjust_speed(sr, -1);
+            break;
+        case 3u:
+            adrift_sr_adjust_speed(sr, 1);
+            break;
+        default:
+            break;
     }
 }

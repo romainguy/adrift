@@ -315,7 +315,7 @@ build_fw() {
         "$OUT/adrift.bin"
 
     AC79_SDK="$SDK_HOST" python3 "$BSP/tools/fm1pkg.py" \
-        "$OUT/adrift.bin" "$OUT/ota.bin" "$OUT/adrift.fwsc" --product FM-1_462000100
+        "$OUT/adrift.bin" "$OUT/ota.bin" "$OUT/adrift.fwsc" --product FM-1_462000200
     echo "  [fwsc]   Ready: $OUT/adrift.fwsc"
 }
 
@@ -455,7 +455,7 @@ build_release() {
         "$OUT/adrift.bin"
 
     AC79_SDK="$SDK" python3 "$BSP/tools/fm1pkg.py" \
-        "$OUT/adrift.bin" "$OUT/ota.bin" "$PKG_OUT" --product FM-1_462000100
+        "$OUT/adrift.bin" "$OUT/ota.bin" "$PKG_OUT" --product FM-1_462000200
 
     if [ -f "$BSP/LICENSES/Apache-2.0.txt" ]; then
         cp "$BSP/LICENSES/Apache-2.0.txt" "$OUT/Apache-2.0.txt"
@@ -567,7 +567,7 @@ except Exception:
 
 meta = {
     "name": "Adrift",
-    "product": "FM-1_462000100",
+    "product": "FM-1_462000200",
     "commit": commit,
     "built_at": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     "fwsc_file": "adrift.fwsc",

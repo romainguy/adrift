@@ -1061,7 +1061,7 @@ function initFirmwareFlasher(emulator) {
         dev.link.close();
         const modeDesc = dev.id.loader
           ? 'Currently in Update Mode (ready to finish writing)'
-          : dev.id.text === 'FM-1_462000100'
+          : dev.id.text === 'FM-1_462000200'
             ? 'Running Adrift firmware'
             : 'Running firmware';
         setStatus('ok', `Connected: ${dev.id.text} on "${dev.name}"`, null);
@@ -1141,7 +1141,7 @@ function initFirmwareFlasher(emulator) {
             setStatus('working', 'Restarting your FM-1 into the new firmware…', 96);
             appendLog('Step 3/3: Write complete! Waiting for FM-1 to restart…');
           } else if (step === 'done') {
-            setStatus('ok', `Success! Your FM-1 is now running ${arg === 'FM-1_462000100' ? 'Adrift' : arg}.`, 100);
+            setStatus('ok', `Success! Your FM-1 is now running ${arg === 'FM-1_462000200' ? 'Adrift' : arg}.`, 100);
             appendLog(`All done — verified ${arg}. Unplug or start playing!`);
           }
         },

@@ -124,7 +124,7 @@ export class Fm1Panel {
     this.cb = callbacks;
     this.ctx = canvas.getContext('2d', { alpha: false });
 
-    // Offscreen 240x240 buffer for crisp pixel-nearest OLED blitting
+    // Offscreen 240x240 buffer for crisp pixel-nearest blitting
     this.lcdCanvas = document.createElement('canvas');
     this.lcdCanvas.width = 240;
     this.lcdCanvas.height = 240;
@@ -220,7 +220,7 @@ export class Fm1Panel {
       }
     }
 
-    // 3. Center OLED display
+    // 3. Center display
     if (
       lx >= LCD_RECT.x &&
       lx < LCD_RECT.x + LCD_RECT.w &&
@@ -503,7 +503,7 @@ export class Fm1Panel {
       ctx.stroke();
     }
 
-    // Center OLED glass bezel
+    // Center glass bezel
     roundRectPath(ctx, BEZEL_RECT.x, BEZEL_RECT.y, BEZEL_RECT.w, BEZEL_RECT.h, BEZEL_RECT.r);
     ctx.fillStyle = '#06080D';
     ctx.fill();
@@ -511,7 +511,7 @@ export class Fm1Panel {
     ctx.strokeStyle = 'rgba(255, 255, 255, 0.11)';
     ctx.stroke();
 
-    // Subtle group-colored ambient glow around OLED frame
+    // Subtle group-colored ambient glow around frame
     ctx.save();
     roundRectPath(ctx, LCD_RECT.x - 2, LCD_RECT.y - 2, LCD_RECT.w + 4, LCD_RECT.h + 4, 4);
     ctx.strokeStyle = accent;
@@ -520,7 +520,7 @@ export class Fm1Panel {
     ctx.stroke();
     ctx.restore();
 
-    // Render 240x240 OLED screen (pixel-sharp)
+    // Render 240x240 screen (pixel-sharp)
     ctx.save();
     ctx.imageSmoothingEnabled = false;
     if (this.hasLiveLcd) {

@@ -7,7 +7,7 @@
 
 #define FELUCCA_CDC 0
 #define FELUCCA_OTA 1
-#define FELUCCA_ID               "FM-1_462000100"
+#define FELUCCA_ID               "FM-1_462000200"
 #define FELUCCA_USB_PID          0x0003
 #define FELUCCA_USB_MANUFACTURER "Adrift Synth"
 #define FELUCCA_USB_PRODUCT      "Adrift FM-1"

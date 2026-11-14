@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MPL-2.0
-// AudioWorkletProcessor hosting Adrift's freestanding C99 DSP & OLED UI engine (adrift.wasm).
+// AudioWorkletProcessor hosting Adrift's freestanding C99 DSP & UI engine (adrift.wasm).
 
 const SRC_RATE = 24000000 / 544; // 44,117.6470588 Hz hardware I2S clock
 const RING_SIZE = 2048;
 const RING_MASK = RING_SIZE - 1;
-const UI_TICK_SAMPLES = 1470; // ~30.01 Hz OLED + LED refresh
+const UI_TICK_SAMPLES = 1470; // ~30.01 Hz + LED refresh
 
 class AdriftProcessor extends AudioWorkletProcessor {
   constructor(options) {

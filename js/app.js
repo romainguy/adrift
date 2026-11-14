@@ -256,7 +256,7 @@ const PRESETS = [
   },
 ];
 
-// ---- Interactive FM-1 Hardware Control & OLED Screen Guide (all 29 screenshots) ----
+// ---- Interactive FM-1 Hardware Control & Screen Guide (all 29 screenshots) ----
 
 const CONTROL_GUIDES = [
   {
@@ -731,7 +731,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  // ---- Interactive Hardware Control & OLED Screen Explorer ----
+  // ---- Interactive Hardware Control & Screen Explorer ----
   initControlExplorer();
 
   // ---- 24 Built-In Presets Showcase ----
@@ -761,7 +761,7 @@ function initControlExplorer() {
   function renderSubpage(guide, subIdx) {
     const scr = guide.screens[subIdx] || guide.screens[0];
     screenImg.src = `./assets/screens/${scr.file}`;
-    screenImg.alt = `${guide.adriftRole} — ${scr.tab} hardware OLED screen`;
+    screenImg.alt = `${guide.adriftRole} — ${scr.tab} hardware screen`;
     if (screenCap) screenCap.textContent = scr.caption;
 
     subTabsEl.querySelectorAll('button').forEach((b, idx) => {

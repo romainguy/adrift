@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: MPL-2.0
- * Adrift Musician Website — Dark-OLED Studio Design System */
+ * Adrift Musician Website — Dark Studio Design System */
 
 :root {
   color-scheme: dark;
@@ -20,7 +20,7 @@
   --text-secondary: #B0BCD2;
   --text-muted: #8492AD;
 
-  /* Authentic Adrift 6 Voice-Group OLED Palette */
+  /* Authentic Adrift 6 Voice-Group Palette */
   --g1-gold: #F8BE30;
   --g2-emerald: #40E88C;
   --g3-cyan: #38D8F8;
@@ -997,7 +997,7 @@ details.accordion[open]::details-content {
   font-size: 0.88rem;
 }
 
-/* ---- Interactive Control & OLED Screen Explorer ---- */
+/* ---- Interactive Control & Screen Explorer ---- */
 
 .explorer-shell {
   container-type: inline-size;

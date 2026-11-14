@@ -60,7 +60,15 @@ need_host_build() {
     [ ! -f "$2" ] || [ "$1" -nt "$2" ] || [ "$NEWEST_HDR" -nt "$2" ]
 }
 
+ensure_dsp_tables() {
+    if [ ! -f "$ROOT/src/dsp/dsp_tables.c" ] || [ ! -f "$ROOT/src/platform/uac_fir.h" ]; then
+        echo "==> Generating DSP & UAC FIR lookup tables..."
+        python3 "$ROOT/tools/gen_dsp_tables.py"
+    fi
+}
+
 build_test() {
+    ensure_dsp_tables
     echo "==> Building & running DSP/MIDI verification suite..."
     OUT="$ROOT/build/test"
     OBJ_DIR="$OUT/obj"
@@ -139,6 +147,7 @@ build_test() {
 }
 
 build_sdl() {
+    ensure_dsp_tables
     echo "==> Building native macOS SDL2 + CoreMIDI simulator..."
     OUT="$ROOT/build/sdl"
     OBJ_DIR="$OUT/obj"
@@ -180,6 +189,7 @@ build_sdl() {
 }
 
 build_screenshots() {
+    ensure_dsp_tables
     echo "==> Building & running headless UI screenshot generator..."
     OUT="$ROOT/build/screenshots"
     OBJ_DIR="$OUT/obj"
@@ -236,6 +246,7 @@ ensure_fw_container() {
 }
 
 build_fw() {
+    ensure_dsp_tables
     echo "==> Building M-VAVE FM-1 hardware firmware (pi32v2 -> adrift.fwsc)..."
     OUT_REL="build/fw"
     OUT="$ROOT/$OUT_REL"
@@ -384,6 +395,7 @@ build_release() {
     fi
 
     ensure_bsp_submodule
+    ensure_dsp_tables
     verify_sdk_blobs "$SDK"
 
     OUT="$ROOT/build/release"
@@ -500,6 +512,7 @@ build_web() {
         esac
     done
 
+    ensure_dsp_tables
     echo "==> Building Adrift website & WebAssembly emulator (build/web/)..."
 
     # Resolve wasm32-capable clang and wasm-ld

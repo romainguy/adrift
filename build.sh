@@ -299,7 +299,7 @@ build_fw() {
 
         if need_build src/platform/platform_fm1.c $OUT_REL/obj/platform_fm1.o; then
             rx $CC -Os $FW_COMMON \
-                -Iexternal/felucca-bsp/chip -Iexternal/felucca-bsp/boards/fm1 \
+                -Isrc/platform -Iexternal/felucca-bsp/chip -Iexternal/felucca-bsp/boards/fm1 \
                 -c src/platform/platform_fm1.c -o $OUT_REL/obj/platform_fm1.o
         fi
 
@@ -444,7 +444,7 @@ build_release() {
     done
 
     rx "$CC_BIN" -target pi32v2 -Os $FW_COMMON \
-        -I"$BSP/chip" -I"$BSP/boards/fm1" \
+        -I"$ROOT/src/platform" -I"$BSP/chip" -I"$BSP/boards/fm1" \
         -c "$ROOT/src/platform/platform_fm1.c" -o "$OUT/obj/platform_fm1.o"
 
     rx "$LD_BIN" --gc-sections -e _start -T "$ROOT/src/platform/app.ld" \

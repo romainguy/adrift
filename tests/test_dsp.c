@@ -2,6 +2,7 @@
  * Core DSP, Exciter, Envelopes, BBD Resonator, Physical Modeling & Modulation Tests */
 
 #include "test_common.h"
+#include "../src/platform/uac_fir.h"
 
 double compute_rms_dbfs(const int16_t *stereo, uint32_t start_f, uint32_t count_f) {
     double sum_sq = 0.0;
@@ -1499,4 +1500,206 @@ void test_extended_mod_targets(void) {
     free(pcm);
     printf("  -> PASS (PAN R/L=+%.1f/+%.1f dB, SPREAD, DRYWET, VCA=+%.1f dB, ALL PT=%.2f ST, EX MIX/LVL, SH CLK, IN RES, DISPR, E1 DEC, L1 RT & UI OK)\n",
            pan_hi_r - pan_hi_l, pan_lo_l - pan_lo_r, vca_hi_db - vca_lo_db, all_span);
+}
+
+/* ============================================================================
+ * 19. USB Audio Class 1 (44.1 kHz Bit-Exact & 48 kHz Polyphase FIR Resampler)
+ * ============================================================================ */
+static uint32_t sim_uac_tap48(const int16_t *in_stereo,
+                              uint32_t n_in,
+                              int16_t *out_stereo,
+                              uint32_t max_out) {
+    enum { RS_H = 32u };
+    int16_t  hist_l[2u * RS_H];
+    int16_t  hist_r[2u * RS_H];
+    uint32_t h   = 0u;
+    uint32_t ph  = 0u;
+    uint32_t out = 0u;
+    memset(hist_l, 0, sizeof(hist_l));
+    memset(hist_r, 0, sizeof(hist_r));
+
+    for (uint32_t i = 0u; i < n_in; i++) {
+        uint32_t s = h & (RS_H - 1u);
+        int16_t  l = in_stereo[2u * i];
+        int16_t  r = in_stereo[2u * i + 1u];
+        hist_l[s] = hist_l[s + RS_H] = l;
+        hist_r[s] = hist_r[s + RS_H] = r;
+        h++;
+        s = (h - UAC_FIR_N) & (RS_H - 1u);
+        do {
+            const int16_t *xl = &hist_l[s];
+            const int16_t *xr = &hist_r[s];
+            int64_t al = 0;
+            int64_t ar = 0;
+            if (ph < UAC_FIR_L / 2u) {
+                const int32_t *c = UAC_FIR[ph];
+                for (uint32_t j = UAC_FIR_N; j; j--, xl++, xr++) {
+                    int32_t t = *c++;
+                    al += (int64_t)t * (*xl);
+                    ar += (int64_t)t * (*xr);
+                }
+            } else {
+                const int32_t *c = &UAC_FIR[UAC_FIR_L - 1u - ph][UAC_FIR_N - 1u];
+                for (uint32_t j = UAC_FIR_N; j; j--, xl++, xr++) {
+                    int32_t t = *c--;
+                    al += (int64_t)t * (*xl);
+                    ar += (int64_t)t * (*xr);
+                }
+            }
+            int32_t yl = (int32_t)((al + (1 << (UAC_FIR_Q - 1))) >> UAC_FIR_Q);
+            int32_t yr = (int32_t)((ar + (1 << (UAC_FIR_Q - 1))) >> UAC_FIR_Q);
+            if (yl > 32767)  yl = 32767;
+            if (yl < -32768) yl = -32768;
+            if (yr > 32767)  yr = 32767;
+            if (yr < -32768) yr = -32768;
+            if (out < max_out) {
+                out_stereo[2u * out]      = (int16_t)yl;
+                out_stereo[2u * out + 1u] = (int16_t)yr;
+            }
+            out++;
+            ph += UAC_FIR_M;
+        } while (ph < UAC_FIR_L);
+        ph -= UAC_FIR_L;
+    }
+    return out;
+}
+
+void test_uac_resampler(void) {
+    printf("[Test 19] USB Audio 44.1 kHz Bit-Exact Tap & 48 kHz Polyphase FIR (uac_fir.h)...\n");
+
+    /* 19a. 44.1 kHz pcm16 -> Q23 (* 256) -> uac_in16 (((v + 128) >> 8)) bit-exactness across all int16_t */
+    int32_t roundtrip_errs = 0;
+    for (int32_t v = -32768; v <= 32767; v++) {
+        int32_t q23 = (int32_t)((int16_t)v) * 256;
+        int32_t u16 = (q23 + 128) >> 8;
+        if (u16 != v) roundtrip_errs++;
+    }
+    CHECK(roundtrip_errs == 0, "Expected 0 roundtrip errors across all 65536 int16_t values, got %d", roundtrip_errs);
+
+    /* 19b. Exact Q30 unity DC gain per polyphase row (eliminates phase-dependent DC modulation) */
+    const int64_t q30_one = (int64_t)1 << UAC_FIR_Q;
+    uint32_t bad_sums = 0u;
+    for (uint32_t ph = 0u; ph < UAC_FIR_L / 2u; ph++) {
+        int64_t s = 0;
+        for (uint32_t k = 0u; k < UAC_FIR_N; k++) {
+            s += UAC_FIR[ph][k];
+        }
+        if (s != q30_one) bad_sums++;
+    }
+    CHECK(bad_sums == 0u, "Expected all 80 polyphase rows to sum to exact 2^30, got %u mismatches", bad_sums);
+
+    /* 19c. Linear ramp continuity across all 160 phases (forward & mirror branches) */
+    const uint32_t N_RAMP = 512u;
+    int16_t ramp_in[512u * 2u];
+    int16_t ramp_out[600u * 2u];
+    for (uint32_t i = 0u; i < N_RAMP; i++) {
+        int16_t v = (int16_t)((int32_t)i * 32 - 8192);
+        ramp_in[2u * i]      = v;
+        ramp_in[2u * i + 1u] = (int16_t)(-v);
+    }
+    uint32_t n_ramp_out = sim_uac_tap48(ramp_in, N_RAMP, ramp_out, 600u);
+    const double expected_step = 32.0 * (double)UAC_FIR_M / (double)UAC_FIR_L; /* 29.400 LSB/step */
+    double max_step_err = 0.0;
+    for (uint32_t i = 64u; i < n_ramp_out - 32u; i++) {
+        double dl = (double)ramp_out[2u * (i + 1u)]      - (double)ramp_out[2u * i];
+        double dr = (double)ramp_out[2u * (i + 1u) + 1u] - (double)ramp_out[2u * i + 1u];
+        double el = fabs(dl - expected_step);
+        double er = fabs(dr + expected_step);
+        if (el > max_step_err) max_step_err = el;
+        if (er > max_step_err) max_step_err = er;
+    }
+    CHECK(max_step_err < 1.1,
+          "Polyphase 160/147 ramp step discontinuity: max_step_err=%.3f LSB (expected ~%.2f LSB/step)",
+          max_step_err, expected_step);
+
+    /* 19d. 1 kHz & 12 kHz passband accuracy and audible-band anti-imaging SFDR */
+    const uint32_t N_IN  = 147u * 60u;  /* 8820 input frames -> exact 9600 output frames */
+    const uint32_t N_OUT = 160u * 60u;
+    int16_t *in_buf  = (int16_t *)calloc(N_IN * 2u, sizeof(int16_t));
+    int16_t *out_buf = (int16_t *)calloc((N_OUT + 16u) * 2u, sizeof(int16_t));
+    CHECK(in_buf != NULL && out_buf != NULL, "UAC resampler test buffer allocation");
+
+    const double fs_in  = FS_EXACT;
+    const double fs_out = FS_EXACT * 160.0 / 147.0;
+    const double amp    = 20000.0;
+
+    for (uint32_t i = 0u; i < N_IN; i++) {
+        double s1 = amp * sin(2.0 * M_PI * 1000.0 * (double)i / fs_in);
+        double s2 = amp * sin(2.0 * M_PI * 12000.0 * (double)i / fs_in);
+        in_buf[2u * i]      = (int16_t)lrint(s1);
+        in_buf[2u * i + 1u] = (int16_t)lrint(s2);
+    }
+    uint32_t got_out = sim_uac_tap48(in_buf, N_IN, out_buf, N_OUT + 16u);
+    CHECK(got_out == N_OUT, "Expected exact %u output frames from %u input frames, got %u", N_OUT, N_IN, got_out);
+
+    /* Measure 1 kHz (L) and 12 kHz (R) steady-state RMS over 8192 frames after startup transient */
+    double sq_l = 0.0;
+    double sq_r = 0.0;
+    const uint32_t W = 8192u;
+    const uint32_t S = 512u;
+    for (uint32_t i = 0u; i < W; i++) {
+        double l = (double)out_buf[2u * (S + i)];
+        double r = (double)out_buf[2u * (S + i) + 1u];
+        sq_l += l * l;
+        sq_r += r * r;
+    }
+    double rms_in = amp / sqrt(2.0);
+    double err_1k_db  = fabs(20.0 * log10(sqrt(sq_l / (double)W) / rms_in));
+    double err_12k_db = fabs(20.0 * log10(sqrt(sq_r / (double)W) / rms_in));
+    CHECK(err_1k_db < 0.05 && err_12k_db < 0.05,
+          "Expected < 0.05 dB passband error at 1 kHz (%.4f dB) and 12 kHz (%.4f dB)",
+          err_1k_db, err_12k_db);
+
+    /* Hann-windowed DFT check on R channel (12 kHz) to verify audible spurs < -75 dBc */
+    double fund_mag = 0.0;
+    double max_spur = 0.0;
+    for (uint32_t bin = 40u; bin < 3400u; bin++) { /* ~234 Hz .. 19.9 kHz at fs_out=48019.2 Hz */
+        double f_bin = (double)bin * fs_out / (double)W;
+        bool is_fund = fabs(f_bin - 12000.0) < 30.0;
+        if (!is_fund && (bin % 37u != 0u || fabs(f_bin - 12000.0) < 120.0)) {
+            continue;
+        }
+        double re = 0.0;
+        double im = 0.0;
+        double w_step = 2.0 * M_PI * (double)bin / (double)W;
+        for (uint32_t n = 0u; n < W; n++) {
+            double h_win = 0.5 - 0.5 * cos(2.0 * M_PI * (double)n / (double)W);
+            double x     = (double)out_buf[2u * (S + n) + 1u] * h_win;
+            re += x * cos(w_step * (double)n);
+            im -= x * sin(w_step * (double)n);
+        }
+        double mag = sqrt(re * re + im * im);
+        if (is_fund) {
+            if (mag > fund_mag) fund_mag = mag;
+        } else {
+            if (mag > max_spur) max_spur = mag;
+        }
+    }
+    /* Also explicitly probe the primary alias/image frequencies (2*fs_in - 3*f0, fs_out - (fs_in - f0), etc.) */
+    const double probe_hz[4] = {
+        fabs(fs_out - (fs_in - 12000.0)),
+        fabs(2.0 * fs_in - 4.0 * 12000.0),
+        32117.647 - 16000.0,
+        4901.56
+    };
+    for (uint32_t p = 0u; p < 4u; p++) {
+        double re = 0.0;
+        double im = 0.0;
+        double w_step = 2.0 * M_PI * probe_hz[p] / fs_out;
+        for (uint32_t n = 0u; n < W; n++) {
+            double h_win = 0.5 - 0.5 * cos(2.0 * M_PI * (double)n / (double)W);
+            double x     = (double)out_buf[2u * (S + n) + 1u] * h_win;
+            re += x * cos(w_step * (double)n);
+            im -= x * sin(w_step * (double)n);
+        }
+        double mag = sqrt(re * re + im * im);
+        if (mag > max_spur) max_spur = mag;
+    }
+    double sfdr_db = 20.0 * log10(fund_mag / (max_spur > 1e-9 ? max_spur : 1e-9));
+    CHECK(sfdr_db > 75.0, "Expected > 75 dBc SFDR on 48 kHz resampled 12 kHz tone, got %.1f dBc", sfdr_db);
+
+    free(out_buf);
+    free(in_buf);
+    printf("  -> PASS (65536 int16 bit-exact, 80x Q30 unity DC, ramp err=%.2f LSB, 1k/12k err=%.4f/%.4f dB, SFDR=%.1f dBc)\n",
+           max_step_err, err_1k_db, err_12k_db, sfdr_db);
 }

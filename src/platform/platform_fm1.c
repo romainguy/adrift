@@ -5,8 +5,14 @@
 #include "../app.h"
 #include "platform.h"
 
-#define FELUCCA_CDC 0
-#define FELUCCA_OTA 1
+#define HALF_FRAMES              ADRIFT_BLOCK_SIZE
+#define HALF_WORDS               (HALF_FRAMES * 2u)
+#define FELUCCA_CDC              0
+#define FELUCCA_OTA              1
+#define FELUCCA_UAC              1
+#define FELUCCA_UAC_48K          1
+#define FELUCCA_UAC_MIDI_LAST    1
+#define FELUCCA_UAC_DEEP         1
 #define FELUCCA_ID               "FM-1_462000200"
 #define FELUCCA_USB_PID          0x0003
 #define FELUCCA_USB_MANUFACTURER "Adrift Synth"
@@ -63,10 +69,9 @@ static volatile uint32_t g_cpu_q12;
 static volatile uint8_t  g_cpu_pct;
 static uint8_t           g_flash_ok;
 
-/* ---- Double-buffered ALNK0 I2S DMA audio (64 stereo frames per half) ---- */
-#define HALF_FRAMES ADRIFT_BLOCK_SIZE
-#define HALF_WORDS  (HALF_FRAMES * 2u)
+/* ---- Double-buffered ALNK0 I2S DMA audio (64 stereo frames per half) + UAC1 tap ---- */
 static int32_t g_abuf[2u * HALF_WORDS] __attribute__((aligned(4)));
+static int32_t g_uac_q23[HALF_WORDS] __attribute__((aligned(4)));
 
 /* ---- Panel note-key MIDI queue (main/timer -> audio ISR) ---- */
 #define KBD_Q_LEN 32u
@@ -292,13 +297,15 @@ bool adrift_platform_storage_erase(uint8_t slot) {
 
 /* ---- Audio DMA ISR (ALNK0 priority 3) ---- */
 static void render_half(int32_t *dma_out) {
+    uint32_t t0 = fm1_ticks();
+    uac_render_start();
     if (g_flash_io_active) {
         for (uint32_t i = 0u; i < HALF_WORDS; i++) {
             dma_out[i] = 0;
         }
+        uac_tap(dma_out, HALF_FRAMES);
         return;
     }
-    uint32_t t0 = fm1_ticks();
     const uint32_t budget_us = (HALF_FRAMES * 1000000u) / ADRIFT_SAMPLE_RATE;
 
     adrift_midi_msg_t events[48];
@@ -328,6 +335,15 @@ static void render_half(int32_t *dma_out) {
 
     int16_t pcm16[HALF_WORDS];
     adrift_app_audio_block(pcm16, HALF_FRAMES, events, nev);
+
+    /* Tap pure un-ducked synth audio for USB Audio Class 1 before headphone speech mixing */
+    if (uac.feed) {
+        for (uint32_t i = 0u; i < HALF_WORDS; i++) {
+            g_uac_q23[i] = (int32_t)pcm16[i] * 256;
+        }
+        uac_tap(g_uac_q23, HALF_FRAMES);
+    }
+
     adrift_app_mix_line_out(pcm16, HALF_FRAMES);
 
     /* Convert signed 16-bit PCM -> signed Q23 in low 24 bits (-8388608..8388607) */
@@ -357,7 +373,7 @@ void fm1_alnk0_irq(void) {
     }
 }
 
-/* ---- 10 kHz Timer ISR (TIMER5 priority 4: nests over ALNK0 for rock-steady key/LED scan) ---- */
+/* ---- 10 kHz Timer ISR (TIMER5 priority 4: nests over ALNK0 for rock-steady key/LED & UAC) ---- */
 void fm1_timer5_irq(void) {
     static uint32_t sub, last_ticks, tick_acc;
     fm1_timer5_ack();
@@ -373,9 +389,15 @@ void fm1_timer5_irq(void) {
 
     if (++sub >= 5u) {
         sub = 0u;
-        g_usb_due = 1u;
-    }
-    if (g_usb_due && !g_in_audio) {
+        if (g_in_audio) {
+            g_usb_due = 1u;
+            uac_service();
+        } else {
+            g_usb_due = 0u;
+            usb_poll();
+            uart_midi_poll();
+        }
+    } else if (g_usb_due && !g_in_audio) {
         g_usb_due = 0u;
         usb_poll();
         uart_midi_poll();

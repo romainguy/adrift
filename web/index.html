@@ -14,7 +14,37 @@
   <header class="site-header">
     <div class="container nav-inner">
       <a class="brand" href="#play">
-        <span class="brand-mark" aria-hidden="true">A</span>
+        <svg class="brand-mark" viewBox="0 0 50 36" width="50" height="36" aria-hidden="true">
+          <defs>
+            <radialGradient id="brand-exciter-glow" cx="50%" cy="50%" r="50%">
+              <stop offset="0%" stop-color="#FFFFFF"/>
+              <stop offset="28%" stop-color="#BCEEFF" stop-opacity="0.95"/>
+              <stop offset="56%" stop-color="#38D8F8" stop-opacity="0.52"/>
+              <stop offset="100%" stop-color="#38D8F8" stop-opacity="0"/>
+            </radialGradient>
+          </defs>
+          <rect width="50" height="36" rx="8" fill="#06080E"/>
+          <rect class="brand-mark-frame" x="0.5" y="0.5" width="49" height="35" rx="7.5" fill="none"/>
+          <g class="brand-waves" fill="none" stroke-width="1.25" stroke-linecap="round">
+            <path d="M5 15.5 C7.17 15.34 9.33 14.63 11.5 13.98 S15.83 12.93 18 13.33 S22.33 14.52 24.5 15.14 S28.83 16.24 31 16.77 S35.33 17.65 37.5 17.66 S41.83 16.78 44 15.5" stroke="var(--g4-coral, #FC6C56)"/>
+            <path d="M5 15.5 C7.17 14.74 9.33 13.67 11.5 13.72 S15.83 14.67 18 15.17 S22.33 15.35 24.5 14.69 S28.83 12.88 31 12.63 S35.33 12.98 37.5 13.71 S41.83 15.14 44 15.5" stroke="var(--g3-cyan, #38D8F8)"/>
+            <path d="M5 15.5 C7.17 16.58 9.33 18.66 11.5 19.62 S15.83 20.27 18 18.43 S22.33 14.05 24.5 13.01 S28.83 12.11 31 13.13 S35.33 15.2 37.5 15.52 S41.83 15.46 44 15.5" stroke="var(--g2-emerald, #40E88C)"/>
+            <path d="M5 15.5 C7.17 14.75 9.33 13.87 11.5 13.33 S15.83 12.64 18 13.92 S22.33 17.87 24.5 19.77 S28.83 23.15 31 22.6 S35.33 19.83 37.5 18 S41.83 15.37 44 15.5" stroke="var(--g1-gold, #F8BE30)"/>
+            <path d="M5 15.5 C7.17 15.73 9.33 16.24 11.5 16.96 S15.83 18.61 18 19.82 S22.33 22.15 24.5 21.96 S28.83 20.31 31 18.16 S35.33 14.02 37.5 13.47 S41.83 14.23 44 15.5" stroke="var(--g5-magenta, #F464C6)"/>
+            <path d="M5 15.5 C7.17 16.34 9.33 16.81 11.5 15.68 S15.83 12.17 18 10.06 S22.33 7.03 24.5 7.84 S28.83 11.1 31 13.18 S35.33 16.1 37.5 16.14 S41.83 15.54 44 15.5" stroke="var(--g6-violet, #A884FF)"/>
+          </g>
+          <line x1="3.8" y1="15.5" x2="5.6" y2="15.5" stroke="#EEF2F8" stroke-width="1.5" stroke-linecap="round"/>
+          <circle cx="44" cy="15.5" r="4.6" fill="url(#brand-exciter-glow)"/>
+          <circle cx="44" cy="15.5" r="1.35" fill="#FFFFFF"/>
+          <g class="brand-pips">
+            <rect x="10" y="28.8" width="3.5" height="1.6" rx="0.8" fill="var(--g1-gold, #F8BE30)"/>
+            <rect x="15.3" y="28.8" width="3.5" height="1.6" rx="0.8" fill="var(--g2-emerald, #40E88C)"/>
+            <rect x="20.6" y="28.8" width="3.5" height="1.6" rx="0.8" fill="var(--g3-cyan, #38D8F8)"/>
+            <rect x="25.9" y="28.8" width="3.5" height="1.6" rx="0.8" fill="var(--g4-coral, #FC6C56)"/>
+            <rect x="31.2" y="28.8" width="3.5" height="1.6" rx="0.8" fill="var(--g5-magenta, #F464C6)"/>
+            <rect x="36.5" y="28.8" width="3.5" height="1.6" rx="0.8" fill="var(--g6-violet, #A884FF)"/>
+          </g>
+        </svg>
         <span class="brand-text">
           <span class="brand-name">ADRIFT</span>
           <span class="brand-sub">for M-VAVE FM-1</span>
@@ -45,7 +75,6 @@
       <div class="container">
         <div class="hero-intro">
           <div>
-            <span class="eyebrow">Custom Instrument Firmware · Free &amp; Open Source</span>
             <h1 id="main-title" tabindex="-1">Acoustic Strings, Singing BBD Pipes &amp; Lush Stereo Pads on Your M-VAVE FM-1.</h1>
             <p class="hero-lead">
               <strong>Adrift</strong> transforms the pocket-sized M-VAVE FM-1 into a 16-voice, 6-part Bucket-Brigade Resonator synthesizer, capable of plucked guitars, bowed cellos, buzzing sitars, granular clouds, hands-free drones, and massive unison leads. Play the real firmware below, or install it straight from your browser.

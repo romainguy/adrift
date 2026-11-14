@@ -190,16 +190,32 @@ a:hover {
 }
 
 .brand-mark {
-  display: inline-grid;
-  place-items: center;
-  inline-size: 2rem;
-  block-size: 2rem;
+  flex: none;
+  inline-size: 3.125rem;
+  block-size: 2.25rem;
   border-radius: 0.5rem;
-  background: linear-gradient(135deg, var(--g5-magenta), var(--g1-gold), var(--g2-emerald));
-  color: #080C12;
-  font-family: var(--font-mono);
-  font-weight: 800;
-  font-size: 0.95rem;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.45);
+  forced-color-adjust: none;
+}
+
+.brand-mark-frame {
+  stroke: var(--border-strong);
+  transition: stroke 160ms ease;
+}
+
+.brand:hover .brand-mark-frame,
+.brand:focus-visible .brand-mark-frame {
+  stroke: rgba(56, 216, 248, 0.45);
+}
+
+.brand-waves {
+  isolation: isolate;
+}
+
+.brand-waves path {
+  stroke-opacity: 0.88;
+  mix-blend-mode: screen;
+  mix-blend-mode: plus-lighter;
 }
 
 .brand-text {

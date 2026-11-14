@@ -121,7 +121,7 @@ Because Adrift repurposes the M-VAVE FM-1's physical panel for BBD physical mode
 
 #### 6 Voice Groups, Arpeggiator & Studio FX (`GRP`, `ARP`, `FX`)
 
-Adrift's 16 voices are shared across **6 independent Voice Groups (`G1`–`G6`)**, each with its own signature OLED color (**Gold**, **Emerald**, **Cyan**, **Coral**, **Magenta**, **Violet**):
+Adrift's 16 voices are shared across **6 independent Voice Groups (`G1`–`G6`)**, each with its own signature color (**Gold**, **Emerald**, **Cyan**, **Coral**, **Magenta**, **Violet**):
 - **Layer Sounds Together**: Assign multiple groups to **MIDI Channel 1** (for example, a plucked acoustic body on `G1` + a delayed octave shimmer on `G2`) so a single key press triggers an evolving multi-layered instrument.
 - **Multi-Timbral Splits & Sequencers**: Keep `G1`–`G6` on **MIDI Channels 1–6** to drive up to 6 distinct synth parts at once from an external sequencer or DAW.
 - **Massive Unison (`UNISON` & `SUPER`)**: Stack a group's voices onto every note with symmetrical stereo **Spread** and **Detune** — either with an independent BBD resonator per voice (`UNISON`) or all oscillators slammed into a single shared resonator (`SUPER`).

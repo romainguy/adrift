@@ -190,16 +190,32 @@ a:hover {
 }
 
 .brand-mark {
-  display: inline-grid;
-  place-items: center;
-  inline-size: 2rem;
-  block-size: 2rem;
+  flex: none;
+  inline-size: 3.125rem;
+  block-size: 2.25rem;
   border-radius: 0.5rem;
-  background: linear-gradient(135deg, var(--g5-magenta), var(--g1-gold), var(--g2-emerald));
-  color: #080C12;
-  font-family: var(--font-mono);
-  font-weight: 800;
-  font-size: 0.95rem;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.45);
+  forced-color-adjust: none;
+}
+
+.brand-mark-frame {
+  stroke: var(--border-strong);
+  transition: stroke 160ms ease;
+}
+
+.brand:hover .brand-mark-frame,
+.brand:focus-visible .brand-mark-frame {
+  stroke: rgba(56, 216, 248, 0.45);
+}
+
+.brand-waves {
+  isolation: isolate;
+}
+
+.brand-waves path {
+  stroke-opacity: 0.88;
+  mix-blend-mode: screen;
+  mix-blend-mode: plus-lighter;
 }
 
 .brand-text {
@@ -557,6 +573,39 @@ section {
   background: rgba(252, 108, 86, 0.16);
   border-color: var(--g4-coral);
   color: var(--g4-coral);
+}
+
+.sr-btn-icon {
+  flex: none;
+}
+
+#btn-sr-toggle .sr-icon-waves {
+  opacity: 0.3;
+  stroke-dasharray: 2 2;
+}
+
+#btn-sr-toggle[aria-pressed="true"] {
+  background: rgba(64, 232, 140, 0.16);
+  border-color: var(--g2-emerald);
+  box-shadow: inset 0 0 0 1px var(--g2-emerald);
+  color: var(--text-primary);
+}
+
+#btn-sr-toggle[aria-pressed="true"] .sr-icon-waves {
+  opacity: 1;
+  stroke-dasharray: none;
+  color: var(--g2-emerald);
+}
+
+.sr-extra-controls {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.sr-extra-controls[hidden] {
+  display: none;
 }
 
 .toggle-label {
@@ -1157,6 +1206,163 @@ details.accordion[open]::details-content {
   color: var(--text-secondary);
 }
 
+/* ---- Built-In Screen Reader & Tactile Key Combos ---- */
+
+.sr-cta-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+  margin-block-start: 1.1rem;
+}
+
+.sr-keyboard-figure {
+  margin: 0 0 1.65rem;
+  padding: 1.2rem;
+  border-radius: var(--radius-lg);
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+}
+
+.sr-kbd-svg {
+  inline-size: 100%;
+  block-size: auto;
+}
+
+.sr-kbd-caption {
+  margin-block-start: 0.95rem;
+  font-size: 0.92rem;
+  color: var(--text-secondary);
+}
+
+/* Responsive Screen Reader Key Combos Table (Modern Web Guidance responsive-table) */
+.sr-table-wrapper {
+  overflow: auto;
+  max-inline-size: 100%;
+  container-type: inline-size;
+  margin-block-end: 1.65rem;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-card);
+}
+
+.sr-combos-table {
+  inline-size: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 0.92rem;
+  text-align: left;
+}
+
+.sr-combos-table caption {
+  padding: 0.85rem 1.1rem;
+  text-align: left;
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  background: var(--bg-surface);
+  border-block-end: 1px solid var(--border-subtle);
+}
+
+.sr-combos-table thead {
+  position: sticky;
+  inset-block-start: 0;
+  z-index: 1;
+}
+
+.sr-combos-table th,
+.sr-combos-table td {
+  padding: 0.85rem 1.1rem;
+  border-block-end: 1px solid var(--border-subtle);
+  vertical-align: top;
+}
+
+.sr-combos-table thead th {
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.sr-combos-table tbody th {
+  position: sticky;
+  inset-inline-start: 0;
+  background: var(--bg-card);
+  color: var(--text-primary);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.sr-combos-table tbody tr:last-child th,
+.sr-combos-table tbody tr:last-child td {
+  border-block-end: none;
+}
+
+.sr-combos-table td {
+  color: var(--text-secondary);
+}
+
+.sr-combos-table td strong {
+  color: var(--text-primary);
+}
+
+.sr-note-sub {
+  display: inline-block;
+  margin-inline-start: 0.3rem;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  font-weight: 500;
+  color: var(--text-muted);
+}
+
+@container (width < 44rem) {
+  .sr-combos-table,
+  .sr-combos-table caption,
+  .sr-combos-table thead,
+  .sr-combos-table tbody,
+  .sr-combos-table tr,
+  .sr-combos-table th,
+  .sr-combos-table td {
+    display: block;
+  }
+
+  .sr-combos-table thead {
+    display: none;
+  }
+
+  .sr-combos-table tbody tr {
+    margin: 0.85rem;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    overflow: clip;
+  }
+
+  .sr-combos-table tbody th {
+    position: sticky;
+    inset-block-start: 0;
+    z-index: 2;
+    background: var(--bg-elevated);
+    white-space: normal;
+  }
+
+  .sr-combos-table {
+    --label-2: "How to Find by Touch";
+    --label-3: "What It Does";
+  }
+
+  .sr-combos-table td:nth-child(2)::before {
+    content: var(--label-2) ": ";
+    font-weight: 600;
+    color: var(--text-primary);
+  }
+
+  .sr-combos-table td:nth-child(3)::before {
+    content: var(--label-3) ": ";
+    font-weight: 600;
+    color: var(--text-primary);
+  }
+}
+
 /* ---- 24 Built-In Factory Presets Gallery (CSS Subgrid) ---- */
 
 .presets-toolbar {
@@ -1449,8 +1655,15 @@ dialog.modal-dialog[open] {
   .stage-card,
   .preset-card,
   .explorer-detail,
+  .sr-keyboard-figure,
+  .sr-table-wrapper,
   .midi-info-card,
   .btn {
     border: 1px solid ButtonText;
+  }
+
+  #btn-sr-toggle[aria-pressed="true"] {
+    outline: 2px solid Highlight;
+    outline-offset: -2px;
   }
 }

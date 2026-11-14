@@ -75,10 +75,14 @@ export class AdriftEmulator {
     this.ready = false;
     this.muted = false;
     this.inSaveMenu = false;
+    this.srEnabled = false;
     this.activePreset = 0;
     this.activeGroup = 0;
     this.pendingWorkletMsgs = [];
     this.heldPianoCodes = new Set();
+    this.previewRaf = 0;
+    this.previewBootFrame = 0;
+    this.previewCompleted = false;
 
     this.midiAccess = null;
     this.selectedMidiId = 'all';
@@ -109,6 +113,74 @@ export class AdriftEmulator {
 
     this._bindKeyboard();
     this._initOptionalWebMidi();
+    this._startBootPreview();
+  }
+
+  _stopBootPreview() {
+    if (this.previewRaf) {
+      cancelAnimationFrame(this.previewRaf);
+      this.previewRaf = 0;
+    }
+  }
+
+  _startBootPreview() {
+    this.wasmBytesPromise
+      .then((wasmBytes) => WebAssembly.instantiate(wasmBytes, {}))
+      .then((res) => {
+        if (this.startingPromise || this.workletNode) return;
+        const inst = res.instance || res;
+        const ex = inst.exports;
+        const mem = ex.memory;
+
+        ex.adrift_web_storage_reset_ram();
+        if (this.flashBytes && this.flashBytes.byteLength) {
+          const ptr = ex.adrift_web_storage_ptr();
+          const cap = ex.adrift_web_storage_len();
+          new Uint8Array(mem.buffer, ptr, cap).set(
+            this.flashBytes.subarray(0, Math.min(this.flashBytes.length, cap))
+          );
+        }
+        ex.adrift_web_init();
+
+        let settleTicks = 15;
+        let lastMs = 0;
+        const step = (now) => {
+          this.previewRaf = 0;
+          if (this.startingPromise || this.workletNode) return;
+          if (lastMs === 0 || now - lastMs >= 14.5) {
+            lastMs = now;
+            ex.adrift_web_tick_ui(8);
+            const bf = ex.adrift_web_boot_frame ? (ex.adrift_web_boot_frame() >>> 0) : 0;
+            this.previewBootFrame = bf > 0 ? bf : 68;
+
+            const rgbaPtr = ex.adrift_web_rgba_ptr();
+            const rgbaCopy = new Uint8ClampedArray(mem.buffer, rgbaPtr, 240 * 240 * 4).slice();
+            this.panel.updateFromWorklet({
+              rgba: rgbaCopy.buffer,
+              btnLeds: ex.adrift_web_leds_buttons() >>> 0,
+              keyLeds: 0,
+              activeGroup: ex.adrift_web_active_group() >>> 0,
+              activePreset: ex.adrift_web_active_preset() >>> 0,
+              inSaveMenu: false,
+              bootFrame: bf,
+            });
+
+            if (bf === 0) {
+              this.previewCompleted = true;
+              if (settleTicks > 0) {
+                settleTicks--;
+              } else {
+                return;
+              }
+            }
+          }
+          this.previewRaf = requestAnimationFrame(step);
+        };
+        this.previewRaf = requestAnimationFrame(step);
+      })
+      .catch(() => {
+        // Ignore preview errors; ensureStarted() reports any real load failure.
+      });
   }
 
   _loadLocalFlash() {
@@ -170,6 +242,10 @@ export class AdriftEmulator {
       return this.startingPromise;
     }
 
+    const resumeBootFrame =
+      this.previewCompleted || this.pendingWorkletMsgs.length > 0 ? 68 : this.previewBootFrame;
+    this._stopBootPreview();
+
     this.startingPromise = (async () => {
       const AudioCtx = window.AudioContext || window.webkitAudioContext;
       if (!this.audioCtx) {
@@ -183,6 +259,7 @@ export class AdriftEmulator {
       await this.audioCtx.audioWorklet.addModule('./js/worklet.js');
 
       const initialFlashCopy = this.flashBytes.slice().buffer;
+      const initialBootFrame = this.pendingWorkletMsgs.length > 0 ? 68 : resumeBootFrame;
       const node = new AudioWorkletNode(this.audioCtx, 'adrift-processor', {
         numberOfInputs: 0,
         numberOfOutputs: 1,
@@ -190,6 +267,7 @@ export class AdriftEmulator {
         processorOptions: {
           wasmBytes,
           initialFlash: initialFlashCopy,
+          initialBootFrame,
         },
       });
 
@@ -200,9 +278,14 @@ export class AdriftEmulator {
           this.inSaveMenu = msg.inSaveMenu;
           const prevPreset = this.activePreset;
           const prevGroup = this.activeGroup;
+          const prevSr = this.srEnabled;
           this.activePreset = msg.activePreset;
           this.activeGroup = msg.activeGroup;
+          this.srEnabled = Boolean(msg.srEnabled);
           this.panel.updateFromWorklet(msg);
+          if (prevSr !== this.srEnabled && this.cb.onScreenReaderState) {
+            this.cb.onScreenReaderState(this.srEnabled);
+          }
           if ((prevPreset !== this.activePreset || prevGroup !== this.activeGroup) && this.cb.onStateChange) {
             this.cb.onStateChange({
               activePreset: this.activePreset,
@@ -259,6 +342,11 @@ export class AdriftEmulator {
   panic() {
     this.heldPianoCodes.clear();
     this._post({ type: 'panic' });
+  }
+
+  async triggerScreenReaderAction(action) {
+    await this.ensureStarted();
+    this._post({ type: 'srAction', action: action & 0xff });
   }
 
   toggleMute() {
@@ -403,6 +491,30 @@ export class AdriftEmulator {
         return;
       }
       if (e.altKey) return;
+
+      // Built-in Screen Reader shortcuts (F1 toggle, F2 where, F3/F4 speed down/up)
+      if (this.ready || document.activeElement === this.canvas) {
+        if (e.code === 'F1') {
+          e.preventDefault();
+          if (!e.repeat) this.triggerScreenReaderAction(0);
+          return;
+        }
+        if (e.code === 'F2') {
+          e.preventDefault();
+          if (!e.repeat) this.triggerScreenReaderAction(1);
+          return;
+        }
+        if (e.code === 'F3') {
+          e.preventDefault();
+          if (!e.repeat) this.triggerScreenReaderAction(2);
+          return;
+        }
+        if (e.code === 'F4') {
+          e.preventDefault();
+          if (!e.repeat) this.triggerScreenReaderAction(3);
+          return;
+        }
+      }
 
       // Direct QWERTY preset-name typing while inside SAVE modal
       if (this.inSaveMenu && this.ready) {

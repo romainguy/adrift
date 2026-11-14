@@ -409,6 +409,20 @@ const CONTROL_GUIDES = [
       { file: '28_scales_browser.png', tab: 'Scale & Root', caption: 'Turn ALGORITHM to pick a scale, Knob 1 to set Root Note (C–B), and OCT+ to apply.' },
     ],
   },
+  {
+    id: 'screen-reader',
+    hwLabel: 'Black Key 11 + Keys 4–7',
+    adriftRole: 'Built-In Screen Reader (Speech)',
+    badgeColor: '#40E88C',
+    summary:
+      'Hold Black Key 11 (F#5, the lone rightmost black key) and press Black Key 6 (F#4) to toggle speech on or off, Black Key 7 (G#4) to hear a full Where Am I? summary of the current screen and all 4 knobs, or Black Keys 4 / 5 (C#4 / D#4) to adjust speech speed (1–5).',
+    tip: 'Speech is mixed strictly into the 3.5 mm headphone / line-out jack and never sent over USB audio out, so you can record clean synth audio over USB while navigating completely by ear.',
+    screens: [
+      { file: '07_exc_1_wave.png', tab: 'Pages & Knobs', caption: 'Speaks plain English words and units ("Exciter, page 1 of 3", "cutoff 1 point 2 kilohertz") once a knob settles.' },
+      { file: '27_presets_browser.png', tab: 'Presets & Scales', caption: 'Reads preset titles, bank sections, list positions ("4 of 24"), and scale names as you browse.' },
+      { file: '29_preset_save.png', tab: 'Accessible Save', caption: 'Reads target slot, character cursor ("position 1 of 12, capital A"), edits, and confirm/cancel keys.' },
+    ],
+  },
 ];
 
 // ---- Complete Musician MIDI CC Reference (matching src/synth/midi.c) ----
@@ -532,6 +546,12 @@ document.addEventListener('DOMContentLoaded', () => {
   const audioBtn = document.getElementById('btn-audio-toggle');
   const audioStatusBadge = document.getElementById('emu-live-readout');
   const panicBtn = document.getElementById('btn-panic');
+  const srToggleBtn = document.getElementById('btn-sr-toggle');
+  const srExtraControls = document.getElementById('sr-extra-controls');
+  const srWhereBtn = document.getElementById('btn-sr-where');
+  const srSlowerBtn = document.getElementById('btn-sr-slower');
+  const srFasterBtn = document.getElementById('btn-sr-faster');
+  const trySrBtn = document.getElementById('btn-try-sr');
   const qwertyCheck = document.getElementById('chk-qwerty');
   const midiSelect = document.getElementById('midi-input-select');
   const midiConnectBtn = document.getElementById('btn-midi-connect');
@@ -574,6 +594,23 @@ document.addEventListener('DOMContentLoaded', () => {
       updateStatusReadout(
         activePreset,
         activeGroup,
+        Boolean(emulator.audioCtx && emulator.audioCtx.state === 'running'),
+        emulator.muted
+      );
+    },
+    onScreenReaderState: (srEnabled) => {
+      if (srToggleBtn) {
+        srToggleBtn.setAttribute('aria-pressed', srEnabled ? 'true' : 'false');
+      }
+      if (srExtraControls) {
+        if (!srEnabled && srExtraControls.contains(document.activeElement) && srToggleBtn) {
+          srToggleBtn.focus();
+        }
+        srExtraControls.hidden = !srEnabled;
+      }
+      updateStatusReadout(
+        emulator.activePreset,
+        emulator.activeGroup,
         Boolean(emulator.audioCtx && emulator.audioCtx.state === 'running'),
         emulator.muted
       );
@@ -624,7 +661,8 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     const gLabel = `G${(groupIdx % 6) + 1}`;
     const stateLabel = !running ? 'Standby — click any key to play' : muted ? 'Audio Muted' : 'Audio Live';
-    audioStatusBadge.textContent = `${pLabel} · Editing ${gLabel} · ${stateLabel}`;
+    const srSuffix = emulator.srEnabled ? ' · Speech On' : '';
+    audioStatusBadge.textContent = `${pLabel} · Editing ${gLabel} · ${stateLabel}${srSuffix}`;
   }
 
   if (userPresetCountEl) {
@@ -674,6 +712,35 @@ document.addEventListener('DOMContentLoaded', () => {
 
   if (panicBtn) {
     panicBtn.addEventListener('click', () => emulator.panic());
+  }
+
+  if (srToggleBtn) {
+    srToggleBtn.addEventListener('click', () => emulator.triggerScreenReaderAction(0));
+  }
+  if (srWhereBtn) {
+    srWhereBtn.addEventListener('click', () => emulator.triggerScreenReaderAction(1));
+  }
+  if (srSlowerBtn) {
+    srSlowerBtn.addEventListener('click', () => emulator.triggerScreenReaderAction(2));
+  }
+  if (srFasterBtn) {
+    srFasterBtn.addEventListener('click', () => emulator.triggerScreenReaderAction(3));
+  }
+  if (trySrBtn) {
+    trySrBtn.addEventListener('click', async () => {
+      const playSec = document.getElementById('play');
+      if (playSec) {
+        playSec.scrollIntoView({ behavior: 'auto', block: 'start' });
+      }
+      if (srToggleBtn) {
+        srToggleBtn.focus();
+      }
+      if (!emulator.srEnabled) {
+        await emulator.triggerScreenReaderAction(0);
+      } else {
+        await emulator.triggerScreenReaderAction(1);
+      }
+    });
   }
 
   if (qwertyCheck) {
@@ -1061,7 +1128,7 @@ function initFirmwareFlasher(emulator) {
         dev.link.close();
         const modeDesc = dev.id.loader
           ? 'Currently in Update Mode (ready to finish writing)'
-          : dev.id.text === 'FM-1_462000100'
+          : dev.id.text === 'FM-1_462000200'
             ? 'Running Adrift firmware'
             : 'Running firmware';
         setStatus('ok', `Connected: ${dev.id.text} on "${dev.name}"`, null);
@@ -1141,7 +1208,7 @@ function initFirmwareFlasher(emulator) {
             setStatus('working', 'Restarting your FM-1 into the new firmware…', 96);
             appendLog('Step 3/3: Write complete! Waiting for FM-1 to restart…');
           } else if (step === 'done') {
-            setStatus('ok', `Success! Your FM-1 is now running ${arg === 'FM-1_462000100' ? 'Adrift' : arg}.`, 100);
+            setStatus('ok', `Success! Your FM-1 is now running ${arg === 'FM-1_462000200' ? 'Adrift' : arg}.`, 100);
             appendLog(`All done — verified ${arg}. Unplug or start playing!`);
           }
         },

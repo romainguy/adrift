@@ -1,9 +1,9 @@
 {
   "name": "Adrift",
   "product": "FM-1_462000300",
-  "commit": "0dfcaef",
-  "built_at": "2026-11-14T20:55:26Z",
+  "commit": "157fd2c",
+  "built_at": "2026-11-14T21:16:09Z",
   "fwsc_file": "adrift.fwsc",
   "fwsc_bytes": 614938,
-  "fwsc_sha256": "79090e5a0269c860dd32e7461ec12fa154ffebd1039b23f651f2eeaa5147f454"
+  "fwsc_sha256": "e356f855ddf51e6cd8ba20440897faf6960c694edb2a80a40ef168610de9e904"
 }

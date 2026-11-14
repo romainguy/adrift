@@ -114,6 +114,9 @@ static void pump_audio_frames(uint32_t total_frames) {
 
 static void render_ui_frame(uint16_t *fb, uint8_t cpu_pct, bool force_full) {
     adrift_ui_t *ui = adrift_app_get_ui();
+    if (ui->boot_active) {
+        adrift_ui_dismiss_boot(ui);
+    }
     if (force_full) {
         ui->initialized = false;
     }

@@ -63,5 +63,6 @@ void test_multi_lfos(void);
 void test_env1_range(void);
 void test_extended_mod_targets(void);
 void test_user_presets_and_save_ui(void);
+void test_boot_animation(void);
 
 #endif /* ADRIFT_TEST_COMMON_H */

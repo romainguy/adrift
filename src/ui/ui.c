@@ -71,6 +71,7 @@ static uint32_t hash_str12(const char *s) {
 static void draw_header(uint16_t *fb,
                         const adrift_synth_t *s,
                         uint8_t cpu_pct,
+                        uint8_t bbd_w,
                         bool in_group_menu,
                         uint8_t toast_slot_plus1) {
     uint8_t g = s->edit_group % ADRIFT_MAX_GROUPS;
@@ -167,7 +168,6 @@ static void draw_header(uint16_t *fb,
     }
 
     /* BBD Resonator energy bar along y = 21..24 */
-    uint32_t bbd_w = compute_header_bbd_width(s);
     fb_fill_rect(fb, 5, 21, 230, 3, COL_BAR_TRACK);
     if (bbd_w > 0u) {
         fb_fill_rect(fb, 5, 21, bbd_w, 3, th->accent);
@@ -1254,6 +1254,7 @@ void adrift_ui_init(adrift_ui_t *ui) {
     ui->scale_orig_type     = 0u;
     ui->scale_orig_root     = 0u;
     ui->initialized         = false;
+    ui->boot_active         = true;
     ui->frame_count         = 0u;
     ui->edit_hold_frames    = 0u;
     ui->sound_hold_frames   = 0u;
@@ -1300,11 +1301,57 @@ void adrift_ui_init(adrift_ui_t *ui) {
     ui->scope_prev_y1        = 218u;
 }
 
+void adrift_ui_dismiss_boot(adrift_ui_t *ui) {
+    if (!ui->boot_active) return;
+    ui->boot_active    = false;
+    ui->boot_bar_decay = 0u;
+    ui->initialized    = false;
+}
+
+static bool boot_should_dismiss(const adrift_synth_t *s, const adrift_input_state_t *in) {
+    if ((in->buttons_pressed | in->buttons_down) != 0u) return true;
+    for (uint32_t i = 0u; i < ADRIFT_NUM_ENC; i++) {
+        if (in->enc_delta[i] != 0) return true;
+    }
+    if (in->text_char != 0 || in->text_cmd != ADRIFT_TEXT_CMD_NONE) return true;
+    if (s->voice_age_counter != 0u || s->any_gate || s->preset_index != 0u) return true;
+    for (uint32_t g = 0u; g < ADRIFT_MAX_GROUPS; g++) {
+        const adrift_group_t *gp = &s->groups[g];
+        if (gp->arp_state.num_notes != 0u ||
+            gp->mono_len != 0u ||
+            gp->sustain_pedal ||
+            gp->mod_wheel != 0u ||
+            gp->aftertouch != 0u ||
+            gp->pitch_bend_q13 != 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
 void adrift_ui_step(adrift_ui_t *ui,
                     adrift_synth_t *synth,
                     const adrift_input_state_t *input,
                     uint16_t *fb,
                     adrift_dirty_t *dirty) {
+    if (ui->boot_active) {
+        if (boot_should_dismiss(synth, input)) {
+            adrift_ui_dismiss_boot(ui);
+        } else if (ui->boot_frame >= ADRIFT_UI_BOOT_FRAMES) {
+            ui->boot_active    = false;
+            ui->boot_bar_decay = 12u;
+            ui->initialized    = false;
+        } else {
+            if (input->master_pot >= 0) {
+                synth->hw_master_pot = input->master_pot;
+            }
+            draw_boot_frame(ui, synth, fb, dirty);
+            ui->boot_frame++;
+            ui->frame_count++;
+            return;
+        }
+    }
+
     bool cards_dirty  = false;
     bool header_dirty = false;
     bool top_dirty    = false;
@@ -1722,6 +1769,13 @@ void adrift_ui_step(adrift_ui_t *ui,
     uint8_t  g          = synth->edit_group % ADRIFT_MAX_GROUPS;
     const adrift_group_t *gp = &synth->groups[g];
     uint8_t  meter_w    = (uint8_t)compute_header_bbd_width(synth);
+    if (ui->boot_bar_decay > 0u) {
+        uint8_t decay_w = (uint8_t)(((uint32_t)ui->boot_bar_decay * 230u) / 12u);
+        ui->boot_bar_decay--;
+        if (decay_w > meter_w) {
+            meter_w = decay_w;
+        }
+    }
     uint8_t  disp_note  = gp->last_note ? gp->last_note : 60u;
     bool     grp_gate   = compute_group_gate(synth, g);
     uint32_t pip_sig    = compute_voice_pip_sig(synth);
@@ -1881,7 +1935,7 @@ void adrift_ui_step(adrift_ui_t *ui,
     /* 6. Render Header (fast micro-updates when only CPU% or BBD energy meter changed) */
     if (header_dirty) {
         uint8_t toast_u1 = toast_on ? (uint8_t)((ui->save_toast_slot % ADRIFT_NUM_USER_PRESETS) + 1u) : 0u;
-        draw_header(fb, synth, input->cpu_load_pct, ui->in_group_menu, toast_u1);
+        draw_header(fb, synth, input->cpu_load_pct, meter_w, ui->in_group_menu, toast_u1);
         adrift_dirty_mark_rows(dirty, 0u, 28u);
     } else {
         if (cpu_only_dirty) {

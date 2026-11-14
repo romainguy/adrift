@@ -565,6 +565,7 @@ static void app_main(void) {
     fm1_lcd_init();
     fm1_lcd_fill_rect(0, 0, 240, 240, 0x0000u);
     fm1_input_init();
+    fm1_led_anim_start(0u);
     fm1_adc_init();
 
     adrift_app_init();
@@ -588,8 +589,9 @@ static void app_main(void) {
     uint32_t last_ui_ms    = 0u;
     uint32_t last_adc_ms   = 0u;
     uint32_t prev_notes    = 0u;
-    uint32_t sounding_keys = 0u;
-    uint32_t prev_log_btn  = 0u;
+    uint32_t sounding_keys   = 0u;
+    uint32_t prev_log_btn    = 0u;
+    uint8_t  boot_led_active = 1u;
     uint8_t  key_note[27];
     uint8_t  key_chan[27];
     int32_t  pot_smooth    = -1;
@@ -635,6 +637,9 @@ static void app_main(void) {
         /* Scan 27-key built-in mini-keyboard (routes to active group's MIDI channel) */
         uint32_t cur_notes = fm1_in.notes;
         if (cur_notes != prev_notes) {
+            if (cur_notes != 0u && adrift_app_get_ui()->boot_active) {
+                adrift_ui_dismiss_boot(adrift_app_get_ui());
+            }
             const adrift_synth_t *s_kbd = adrift_app_get_synth();
             uint8_t  ch_nib = (uint8_t)((adrift_synth_active_group(s_kbd)->midi_channel - 1u) & 0x0Fu);
             uint32_t diff   = cur_notes ^ prev_notes;
@@ -700,7 +705,23 @@ static void app_main(void) {
             adrift_dirty_clear(&dirty);
             adrift_app_tick_ui(&in_st, g_fb, &dirty);
             flush_dirty_lcd(&dirty);
-            update_panel_leds(sounding_keys);
+            if (adrift_app_get_ui()->boot_active) {
+                boot_led_active = 1u;
+                if (!fm1_led_anim_on()) {
+                    for (uint32_t id = 0u; id < 41u; id++) {
+                        fm1_led_key(id, 0);
+                    }
+                }
+            } else {
+                if (boot_led_active || fm1_led_anim_on()) {
+                    fm1_led_anim_stop();
+                    for (uint32_t c = 0u; c < FM1_NCOL; c++) {
+                        fm1_led_dim[c] = 0u;
+                    }
+                    boot_led_active = 0u;
+                }
+                update_panel_leds(sounding_keys);
+            }
             (void)adrift_preset_store_flush_pending();
         }
     }

@@ -11,6 +11,7 @@
 #define ADRIFT_UI_NUM_HOME_MODES    3u
 #define ADRIFT_UI_SPEC_BINS         32u
 #define ADRIFT_UI_WATERFALL_ROWS    24u
+#define ADRIFT_UI_BOOT_FRAMES       68u
 #define ADRIFT_UI_PRESET_FACT_COUNT (2u + ADRIFT_NUM_PRESETS) /* 0=INIT SYNTH, 1=INIT GROUP, 2..25=P1..P24 */
 #define ADRIFT_UI_PRESET_USER_COUNT (ADRIFT_NUM_USER_PRESETS) /* 24 = U1..U24 */
 #define ADRIFT_UI_PRESET_ALL_COUNT  (ADRIFT_UI_PRESET_FACT_COUNT + ADRIFT_UI_PRESET_USER_COUNT) /* 50 */
@@ -76,6 +77,11 @@ typedef struct {
     uint8_t  scale_orig_type; /* Saved kbd_scale when opening Scale Browser */
     uint8_t  scale_orig_root; /* Saved kbd_scale_root when opening Scale Browser */
     bool     initialized;
+    bool     boot_active;
+    uint8_t  boot_frame;
+    uint8_t  boot_bar_decay;
+    uint8_t  boot_prev_y0;
+    uint8_t  boot_prev_y1;
     uint32_t frame_count;
     uint8_t  edit_hold_frames;
     uint8_t  sound_hold_frames;
@@ -159,6 +165,7 @@ typedef struct {
 } adrift_ui_t;
 
 void     adrift_ui_init(adrift_ui_t *ui);
+void     adrift_ui_dismiss_boot(adrift_ui_t *ui);
 uint16_t adrift_ui_group_accent_rgb565(uint8_t group_idx);
 
 static inline uint16_t adrift_ui_voice_accent_rgb565(uint8_t group_idx) {

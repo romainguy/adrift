@@ -139,6 +139,7 @@ static uint8_t  g_qwerty_note[ADRIFT_WEB_QWERTY_SLOTS];
 static uint8_t  g_qwerty_chan[ADRIFT_WEB_QWERTY_SLOTS];
 
 static uint32_t g_leds_buttons  = 0u;
+static uint8_t  g_web_boot_frame = 0u;
 
 static void queue_midi(uint8_t status, uint8_t d1, uint8_t d2) {
     if (g_midi_len < ADRIFT_WEB_MIDI_CAP) {
@@ -238,8 +239,9 @@ WASM_EXPORT void adrift_web_init(void) {
     g_master_pot    = 900;
     g_text_char     = 0;
     g_text_cmd      = ADRIFT_TEXT_CMD_NONE;
-    g_sounding_keys = 0u;
-    g_storage_dirty = 0u;
+    g_sounding_keys  = 0u;
+    g_storage_dirty  = 0u;
+    g_web_boot_frame = 0u;
 
     for (uint32_t e = 0u; e < ADRIFT_NUM_ENC; e++) {
         g_enc_acc[e] = 0;
@@ -260,6 +262,9 @@ WASM_EXPORT void adrift_web_init(void) {
 }
 
 WASM_EXPORT void adrift_web_push_midi(uint8_t status, uint8_t d1, uint8_t d2) {
+    if (status < 0xF8u) {
+        adrift_ui_dismiss_boot(adrift_app_get_ui());
+    }
     queue_midi(status, d1, d2);
 }
 
@@ -269,6 +274,7 @@ WASM_EXPORT void adrift_web_panel_key(uint8_t key_idx, uint8_t down, uint8_t vel
     }
     const adrift_synth_t *s = adrift_app_get_synth();
     if (down) {
+        adrift_ui_dismiss_boot(adrift_app_get_ui());
         if (g_key_note[key_idx] <= 127u) {
             queue_midi((uint8_t)(0x80u | g_key_chan[key_idx]), g_key_note[key_idx], 0u);
             g_key_note[key_idx] = 0xFFu;
@@ -299,6 +305,7 @@ WASM_EXPORT void adrift_web_qwerty_note(uint8_t slot_id, int32_t semi_from_c4, u
     }
     const adrift_synth_t *s = adrift_app_get_synth();
     if (down) {
+        adrift_ui_dismiss_boot(adrift_app_get_ui());
         if (g_qwerty_note[slot_id] <= 127u) {
             queue_midi((uint8_t)(0x80u | g_qwerty_chan[slot_id]), g_qwerty_note[slot_id], 0u);
             g_qwerty_note[slot_id] = 0xFFu;
@@ -366,6 +373,11 @@ WASM_EXPORT void adrift_web_lcd_click(int32_t x, int32_t y, uint8_t right_btn) {
     adrift_ui_t    *ui = adrift_app_get_ui();
     adrift_synth_t *s  = adrift_app_get_synth();
 
+    if (ui->boot_active) {
+        adrift_ui_dismiss_boot(ui);
+        return;
+    }
+
     if (right_btn) {
         if (x >= 5 && x < 130 && y >= 0 && y <= 21) {
             g_log_btn_pulse |= ADRIFT_BTN_SAVE_PRESET;
@@ -426,6 +438,7 @@ WASM_EXPORT void adrift_web_load_preset(uint8_t preset_idx) {
     adrift_synth_t *s  = adrift_app_get_synth();
     adrift_ui_t    *ui = adrift_app_get_ui();
 
+    adrift_ui_dismiss_boot(ui);
     ui->in_preset_menu   = false;
     ui->preset_previewed = false;
     ui->in_scale_menu    = false;
@@ -525,7 +538,9 @@ WASM_EXPORT void adrift_web_tick_ui(uint8_t cpu_load_pct) {
     adrift_app_tick_ui(&in_st, g_rgb565_fb, &dirty);
     (void)adrift_preset_store_flush_pending();
 
-    g_leds_buttons = compute_button_leds(hw_eff);
+    const adrift_ui_t *ui = adrift_app_get_ui();
+    g_web_boot_frame = ui->boot_active ? ui->boot_frame : 0u;
+    g_leds_buttons   = ui->boot_active ? 0u : compute_button_leds(hw_eff);
 
     /* Expand RGB565 framebuffer to RGBA8888 for HTML5 Canvas ImageData */
     const uint32_t total_px = ADRIFT_SCREEN_W * ADRIFT_SCREEN_H;
@@ -564,4 +579,21 @@ WASM_EXPORT uint32_t adrift_web_active_preset(void) {
 
 WASM_EXPORT uint32_t adrift_web_in_save_menu(void) {
     return adrift_app_get_ui()->in_save_menu ? 1u : 0u;
+}
+
+WASM_EXPORT uint32_t adrift_web_boot_frame(void) {
+    return g_web_boot_frame;
+}
+
+WASM_EXPORT void adrift_web_set_boot_frame(uint8_t frame) {
+    adrift_ui_t *ui = adrift_app_get_ui();
+    if (frame >= ADRIFT_UI_BOOT_FRAMES) {
+        adrift_ui_dismiss_boot(ui);
+        g_web_boot_frame = 0u;
+    } else {
+        ui->boot_active  = true;
+        ui->boot_frame   = frame;
+        ui->initialized  = false;
+        g_web_boot_frame = frame;
+    }
 }

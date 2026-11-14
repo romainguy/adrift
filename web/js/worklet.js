@@ -5,6 +5,7 @@ const SRC_RATE = 24000000 / 544; // 44,117.6470588 Hz hardware I2S clock
 const RING_SIZE = 2048;
 const RING_MASK = RING_SIZE - 1;
 const UI_TICK_SAMPLES = 1470; // ~30.01 Hz + LED refresh
+const UI_BOOT_TICK_SAMPLES = 735; // ~60.02 Hz during boot animation + bar settle
 
 class AdriftProcessor extends AudioWorkletProcessor {
   constructor(options) {
@@ -23,6 +24,8 @@ class AdriftProcessor extends AudioWorkletProcessor {
     this.dspWallAccumMs = 0;
     this.lastUiWallMs = Date.now();
     this.cpuPct = 8;
+    this.bootActive = true;
+    this.fastUiTicks = 16;
 
     this.muted = false;
     this.muteGain = 1.0;
@@ -37,10 +40,10 @@ class AdriftProcessor extends AudioWorkletProcessor {
     };
 
     const opts = (options && options.processorOptions) || {};
-    this._initWasm(opts.wasmBytes, opts.initialFlash);
+    this._initWasm(opts.wasmBytes, opts.initialFlash, opts.initialBootFrame);
   }
 
-  async _initWasm(wasmBytes, initialFlash) {
+  async _initWasm(wasmBytes, initialFlash, initialBootFrame) {
     try {
       const res = await WebAssembly.instantiate(wasmBytes, {});
       const inst = res.instance || res;
@@ -57,16 +60,19 @@ class AdriftProcessor extends AudioWorkletProcessor {
       }
 
       this.exports.adrift_web_init();
-
-      // Prime initial interpolation history so Hermite cubic starts cleanly at sample 0
-      this._produceSourceFrames(64);
-      this.srcPos = 2.0;
-      this.ready = true;
+      if (typeof initialBootFrame === 'number' && initialBootFrame > 0 && this.exports.adrift_web_set_boot_frame) {
+        this.exports.adrift_web_set_boot_frame(initialBootFrame & 0xff);
+      }
 
       for (let i = 0; i < this.pendingMsgs.length; i++) {
         this._handleMsg(this.pendingMsgs[i]);
       }
       this.pendingMsgs.length = 0;
+
+      // Prime initial interpolation history so Hermite cubic starts cleanly at sample 0
+      this._produceSourceFrames(64);
+      this.srcPos = 2.0;
+      this.ready = true;
 
       this._emitUiFrame();
       this.port.postMessage({ type: 'ready' });
@@ -187,6 +193,16 @@ class AdriftProcessor extends AudioWorkletProcessor {
       this._emitStorage();
     }
 
+    const bootFrame = this.exports.adrift_web_boot_frame ? (this.exports.adrift_web_boot_frame() >>> 0) : 0;
+    if (bootFrame > 0) {
+      this.bootActive = true;
+      this.fastUiTicks = 16;
+    } else if (this.bootActive) {
+      this.bootActive = false;
+    } else if (this.fastUiTicks > 0) {
+      this.fastUiTicks--;
+    }
+
     const rgbaPtr = this.exports.adrift_web_rgba_ptr();
     const rgbaCopy = new Uint8ClampedArray(this.mem.buffer, rgbaPtr, 240 * 240 * 4).slice();
     this.port.postMessage(
@@ -198,6 +214,7 @@ class AdriftProcessor extends AudioWorkletProcessor {
         activeGroup: this.exports.adrift_web_active_group() >>> 0,
         activePreset: this.exports.adrift_web_active_preset() >>> 0,
         inSaveMenu: this.exports.adrift_web_in_save_menu() !== 0,
+        bootFrame,
       },
       [rgbaCopy.buffer]
     );
@@ -260,8 +277,9 @@ class AdriftProcessor extends AudioWorkletProcessor {
     this.srcPos = pos;
     this.muteGain = gain;
 
-    if (this.uiSampleAccum >= UI_TICK_SAMPLES) {
-      this.uiSampleAccum %= UI_TICK_SAMPLES;
+    const tickSamples = (this.bootActive || this.fastUiTicks > 0) ? UI_BOOT_TICK_SAMPLES : UI_TICK_SAMPLES;
+    if (this.uiSampleAccum >= tickSamples) {
+      this.uiSampleAccum %= tickSamples;
       this._emitUiFrame();
     }
 

@@ -133,8 +133,9 @@ export class Fm1Panel {
     this.hasLiveLcd = false;
     this.placeholderImg = null;
 
-    this.btnLeds = 1 << 8; // HOME lit on boot preview
+    this.btnLeds = 0;
     this.keyLeds = 0;
+    this.bootFrame = 0;
     this.activeGroup = 0;
     this.showQwertyHints = true;
     this.showAdriftLabels = true;
@@ -436,8 +437,29 @@ export class Fm1Panel {
     this.hasLiveLcd = true;
     this.btnLeds = frame.btnLeds >>> 0;
     this.keyLeds = frame.keyLeds >>> 0;
+    this.bootFrame = (frame.bootFrame || 0) >>> 0;
     this.activeGroup = frame.activeGroup % 6;
     this.requestDraw();
+  }
+
+  _bootLedGlow(xNorm) {
+    if (!this.bootFrame || this.bootFrame > 68) return 0;
+    const u = (this.bootFrame - 1) / 67;
+    let sweep = 0;
+    if (u < 0.62) {
+      const front = (u / 0.42) * 1.18 - 0.06;
+      const dist = front - xNorm;
+      if (dist >= -0.09 && dist <= 0.34) {
+        sweep = dist < 0 ? 1 + dist / 0.09 : 1 - dist / 0.34;
+        sweep *= sweep;
+      }
+    }
+    let breath = 0;
+    if (u > 0.32 && u < 0.78) {
+      const bu = (u - 0.32) / 0.46;
+      breath = Math.sin(bu * Math.PI) * 0.45;
+    }
+    return Math.min(1, Math.max(sweep, breath));
   }
 
   requestDraw() {
@@ -533,8 +555,8 @@ export class Fm1Panel {
     }
     ctx.restore();
 
-    // If audio hasn't started yet, draw a subtle non-blocking prompt pill at the bottom of the bezel
-    if (!this.audioRunning) {
+    // If audio hasn't started yet (and boot splash has finished), draw a subtle non-blocking prompt pill
+    if (!this.audioRunning && !this.bootFrame) {
       roundRectPath(ctx, LCD_RECT.x + 114, LCD_RECT.y + LCD_RECT.h - 36, 252, 26, 13);
       ctx.fillStyle = 'rgba(8, 12, 18, 0.88)';
       ctx.fill();
@@ -708,7 +730,8 @@ export class Fm1Panel {
   }
 
   _drawButton(ctx, b, accent) {
-    const isLit = ((this.btnLeds >>> b.hw) & 1) !== 0;
+    const bootGlow = this._bootLedGlow((b.x + b.w * 0.5) / PANEL_W);
+    const isLit = ((this.btnLeds >>> b.hw) & 1) !== 0 || bootGlow > 0.55;
     const isDown = this.pressedButtons.has(b.hw);
     const yOff = isDown ? 1.5 : 0;
 
@@ -732,13 +755,21 @@ export class Fm1Panel {
     }
     ctx.fill();
 
-    ctx.lineWidth = isLit ? 1.8 : 1.1;
-    ctx.strokeStyle = isLit ? '#F8BE30' : 'rgba(255, 255, 255, 0.12)';
+    ctx.lineWidth = isLit || bootGlow > 0.15 ? 1.8 : 1.1;
+    ctx.strokeStyle = isLit
+      ? '#F8BE30'
+      : bootGlow > 0.05
+        ? `rgba(248, 190, 48, ${(0.15 + bootGlow * 0.85).toFixed(3)})`
+        : 'rgba(255, 255, 255, 0.12)';
     ctx.stroke();
 
     // Top LED window inside button
     roundRectPath(ctx, b.x + b.w / 2 - 9, b.y + yOff + 7, 18, 5, 2.5);
-    ctx.fillStyle = isLit ? '#FFD15C' : '#111520';
+    ctx.fillStyle = ((this.btnLeds >>> b.hw) & 1) !== 0
+      ? '#FFD15C'
+      : bootGlow > 0.03
+        ? `rgba(255, 209, 92, ${bootGlow.toFixed(3)})`
+        : '#111520';
     ctx.fill();
 
     // Primary hardware legend
@@ -759,6 +790,7 @@ export class Fm1Panel {
 
   _drawKey(ctx, k, accent) {
     const isDown = this.pressedKeys.has(k.k);
+    const bootGlow = this._bootLedGlow(k.k / 26);
     const isSounding = ((this.keyLeds >>> k.k) & 1) !== 0 || isDown;
     const yOff = isDown ? 2.5 : 0;
 
@@ -767,8 +799,17 @@ export class Fm1Panel {
     const ledY = k.y - 8;
     ctx.beginPath();
     ctx.arc(ledX, ledY, 3.3, 0, Math.PI * 2);
-    ctx.fillStyle = isSounding ? accent : '#1A202E';
+    ctx.fillStyle = '#1A202E';
     ctx.fill();
+    if (isSounding || bootGlow > 0.03) {
+      ctx.save();
+      ctx.globalAlpha = isSounding ? 1 : bootGlow;
+      ctx.beginPath();
+      ctx.arc(ledX, ledY, 3.3, 0, Math.PI * 2);
+      ctx.fillStyle = accent;
+      ctx.fill();
+      ctx.restore();
+    }
 
     // Key shadow
     roundRectPath(ctx, k.x, k.y + 3, k.w, k.h, k.r);

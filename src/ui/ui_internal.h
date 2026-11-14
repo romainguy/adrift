@@ -107,4 +107,10 @@ void draw_home_page_extra(uint16_t *fb,
                           bool pips_dirty,
                           adrift_dirty_t *dirty);
 
+/* Power-on boot splash animation (ui_boot.c) */
+void draw_boot_frame(adrift_ui_t *ui,
+                     const adrift_synth_t *s,
+                     uint16_t *fb,
+                     adrift_dirty_t *dirty);
+
 #endif /* ADRIFT_UI_INTERNAL_H */

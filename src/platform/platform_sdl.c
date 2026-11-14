@@ -496,6 +496,7 @@ int main(int argc, char **argv) {
                         default: {
                             int semi = scancode_to_semitone(ev.key.keysym.scancode);
                             if (semi >= 0) {
+                                adrift_ui_dismiss_boot(adrift_app_get_ui());
                                 const adrift_synth_t *s_kbd = adrift_app_get_synth();
                                 int32_t n = adrift_synth_map_kbd_key(s_kbd, semi);
                                 if (n >= 0) {
@@ -524,6 +525,12 @@ int main(int argc, char **argv) {
                 }
 
                 case SDL_MOUSEBUTTONDOWN:
+                    if (adrift_app_get_ui()->boot_active &&
+                        ev.button.x >= TFT_X && ev.button.x < TFT_X + 480 &&
+                        ev.button.y >= TFT_Y && ev.button.y < TFT_Y + 480) {
+                        adrift_ui_dismiss_boot(adrift_app_get_ui());
+                        break;
+                    }
                     if (ev.button.button == SDL_BUTTON_RIGHT) {
                         int mx = ev.button.x, my = ev.button.y;
                         if (mx >= TFT_X + 10 && mx < TFT_X + 260 && my >= TFT_Y && my <= TFT_Y + 42) {
@@ -674,12 +681,33 @@ int main(int argc, char **argv) {
         SDL_RenderCopy(ren, tft_tex, NULL, &tft_dst);
 
         /* Draw 7 interactive rotary encoders on right-hand deck in active group theme color */
-        uint16_t acc565 = adrift_ui_group_accent_rgb565(adrift_app_get_synth()->edit_group);
-        Uint8 acc_r = (Uint8)(((acc565 >> 11) & 0x1Fu) * 255u / 31u);
-        Uint8 acc_g = (Uint8)(((acc565 >> 5)  & 0x3Fu) * 255u / 63u);
-        Uint8 acc_b = (Uint8)(( acc565        & 0x1Fu) * 255u / 31u);
+        const adrift_ui_t *sdl_ui = adrift_app_get_ui();
+        uint16_t base_acc565 = adrift_ui_group_accent_rgb565(adrift_app_get_synth()->edit_group);
 
         for (int e = 0; e < (int)ADRIFT_NUM_ENC; e++) {
+            uint16_t acc565 = base_acc565;
+            uint32_t bright = 256u;
+            if (sdl_ui->boot_active) {
+                int32_t bf   = (int32_t)sdl_ui->boot_frame;
+                int32_t peak = 6 + e * 5;
+                int32_t dist = (bf > peak) ? (bf - peak) : (peak - bf);
+                uint32_t wave = (dist < 14) ? (uint32_t)(((14 - dist) * 256) / 14) : 0u;
+                uint32_t hold = (bf >= peak && bf < 52) ? 140u : 0u;
+                bright = (wave > hold) ? wave : hold;
+                if (bf >= 52) {
+                    bright = (uint32_t)(((bf - 52) * 256) / 16);
+                    acc565 = base_acc565;
+                } else {
+                    acc565 = adrift_ui_group_accent_rgb565((uint8_t)(e % ADRIFT_MAX_GROUPS));
+                }
+            }
+            Uint8 full_r = (Uint8)(((acc565 >> 11) & 0x1Fu) * 255u / 31u);
+            Uint8 full_g = (Uint8)(((acc565 >> 5)  & 0x3Fu) * 255u / 63u);
+            Uint8 full_b = (Uint8)(( acc565        & 0x1Fu) * 255u / 31u);
+            Uint8 acc_r  = (Uint8)(((uint32_t)40u * (256u - bright) + (uint32_t)full_r * bright) >> 8);
+            Uint8 acc_g  = (Uint8)(((uint32_t)46u * (256u - bright) + (uint32_t)full_g * bright) >> 8);
+            Uint8 acc_b  = (Uint8)(((uint32_t)62u * (256u - bright) + (uint32_t)full_b * bright) >> 8);
+
             int kx, ky;
             get_knob_center(e, &kx, &ky);
             SDL_SetRenderDrawColor(ren, 40, 46, 62, 255);

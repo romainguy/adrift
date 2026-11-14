@@ -1574,3 +1574,201 @@ void test_user_presets_and_save_ui(void) {
     free(pcm);
     printf("  -> PASS (U1..U24 Round-Trip, IEEE CRC32 Reject, Backup Sector Recovery, GRP Load & MIDI CC0 OK)\n");
 }
+
+/* =========================================================================
+ * Test: Power-On Boot Animation, Dirty-Band Equivalence, Dock & Play-Through
+ * ========================================================================= */
+void test_boot_animation(void) {
+    printf("[Test 18] Boot Animation (68-Frame Bloom, Dirty-Band Equivalence, Dock & Play-Through)...\n");
+    const uint32_t npx = ADRIFT_SCREEN_W * ADRIFT_SCREEN_H;
+    uint16_t *fb      = (uint16_t *)calloc(npx, sizeof(uint16_t));
+    uint16_t *fb_prev = (uint16_t *)calloc(npx, sizeof(uint16_t));
+    uint16_t *fb_ref  = (uint16_t *)calloc(npx, sizeof(uint16_t));
+    int16_t  *pcm     = (int16_t *)calloc(1024u * 2u, sizeof(int16_t));
+
+    adrift_app_init();
+    adrift_synth_t *s  = adrift_app_get_synth();
+    adrift_ui_t    *ui = adrift_app_get_ui();
+    CHECK(ui->boot_active && ui->boot_frame == 0u,
+          "Expected boot_active=true, boot_frame=0 after adrift_app_init");
+
+    /* 1. Silent boot audio + passive 0xF8 MIDI Clock & MASTER pot tracking must not dismiss boot */
+    adrift_synth_handle_midi_realtime(s, 0xF8u);
+    adrift_headless_render(pcm, 512u, NULL, 0u);
+    double idle_rms = compute_rms_dbfs(pcm, 0u, 512u);
+    CHECK(idle_rms < -120.0, "Expected silent audio during boot (got %.1f dBFS)", idle_rms);
+
+    uint32_t max_inc_dirty   = 0u;
+    uint32_t max_glide_dirty = 0u;
+    const uint16_t col_bg    = (uint16_t)((((12u) & 0xF8u) << 8) | (((14u) & 0xFCu) << 3) | (((20u) & 0xF8u) >> 3));
+    const uint16_t g1_gold   = adrift_ui_group_accent_rgb565(0u);
+
+    /* 2. Step all 68 boot frames and verify dirty-band accuracy + bit-exact full-redraw equivalence */
+    for (uint32_t f = 0u; f < ADRIFT_UI_BOOT_FRAMES; f++) {
+        memcpy(fb_prev, fb, npx * sizeof(uint16_t));
+        adrift_ui_t ui_snap = *ui;
+
+        adrift_input_state_t in_st;
+        memset(&in_st, 0, sizeof(in_st));
+        in_st.master_pot   = 900; /* Hardware/web master pot must update synth without dismissing boot */
+        in_st.cpu_load_pct = 7u;
+
+        adrift_dirty_t dirty;
+        adrift_dirty_clear(&dirty);
+        adrift_app_tick_ui(&in_st, fb, &dirty);
+
+        CHECK(ui->boot_active && ui->boot_frame == (uint8_t)(f + 1u) && s->hw_master_pot == 900,
+              "Expected boot frame %u->%u active with hw_master_pot=900", f, f + 1u);
+
+        if (f == 0u) {
+            CHECK(dirty.full_redraw, "Expected full_redraw on boot frame 0");
+        } else {
+            CHECK(!dirty.full_redraw, "Unexpected full_redraw on incremental boot frame %u", f);
+            uint32_t dirty_rows = 0u;
+            for (uint32_t y = 0u; y < ADRIFT_SCREEN_H; y++) {
+                bool row_marked  = (dirty.row_mask[y >> 5] & (1u << (y & 31u))) != 0u;
+                bool row_changed = memcmp(&fb[y * ADRIFT_SCREEN_W],
+                                          &fb_prev[y * ADRIFT_SCREEN_W],
+                                          ADRIFT_SCREEN_W * sizeof(uint16_t)) != 0;
+                CHECK(!row_changed || row_marked,
+                      "Unmarked modified row y=%u on boot frame %u", y, f);
+                if (row_marked) dirty_rows++;
+            }
+            CHECK(dirty_rows > 0u && dirty_rows <= 96u,
+                  "Boot frame %u dirty_rows=%u out of [1..96] SPI DMA fast budget", f, dirty_rows);
+            if (dirty_rows > max_inc_dirty) max_inc_dirty = dirty_rows;
+            if (f >= 52u && dirty_rows > max_glide_dirty) max_glide_dirty = dirty_rows;
+        }
+
+        /* Bit-exact comparison against a fresh full-screen clear render of frame f */
+        adrift_ui_t ui_ref = ui_snap;
+        ui_ref.initialized = false;
+        for (uint32_t i = 0u; i < npx; i++) {
+            fb_ref[i] = 0xA55Au;
+        }
+        adrift_dirty_t d_ref;
+        adrift_dirty_clear(&d_ref);
+        adrift_ui_step(&ui_ref, s, &in_st, fb_ref, &d_ref);
+        CHECK(memcmp(fb, fb_ref, npx * sizeof(uint16_t)) == 0,
+              "Incremental vs fresh render pixel mismatch on boot frame %u", f);
+
+        if (f == 26u) {
+            uint32_t lit_wm = 0u, lit_str = 0u, lit_sub = 0u;
+            for (uint32_t y = 82u; y <= 103u; y++) {
+                for (uint32_t x = 42u; x < 198u; x++) {
+                    if (fb[y * ADRIFT_SCREEN_W + x] != col_bg) lit_wm++;
+                }
+            }
+            for (uint32_t y = 105u; y <= 139u; y++) {
+                for (uint32_t x = 12u; x <= 227u; x++) {
+                    if (fb[y * ADRIFT_SCREEN_W + x] != col_bg) lit_str++;
+                }
+            }
+            for (uint32_t y = 141u; y <= 156u; y++) {
+                for (uint32_t x = 40u; x < 200u; x++) {
+                    if (fb[y * ADRIFT_SCREEN_W + x] != col_bg) lit_sub++;
+                }
+            }
+            CHECK(lit_wm > 400u && lit_str > 600u && lit_sub > 200u,
+                  "Expected rich bloom on frame 26 (wm=%u, str=%u, sub=%u)", lit_wm, lit_str, lit_sub);
+        }
+
+        if (f == ADRIFT_UI_BOOT_FRAMES - 1u) {
+            /* Final boot frame must dock cleanly onto (x=5..234, y=21..23) in G1 Gold */
+            CHECK(fb[21u * ADRIFT_SCREEN_W + 4u] == col_bg &&
+                  fb[21u * ADRIFT_SCREEN_W + 5u] == g1_gold &&
+                  fb[22u * ADRIFT_SCREEN_W + 120u] == g1_gold &&
+                  fb[23u * ADRIFT_SCREEN_W + 234u] == g1_gold &&
+                  fb[21u * ADRIFT_SCREEN_W + 235u] == col_bg,
+                  "Expected final boot frame %u to dock exactly at Header BBD bar (x=5..234, y=21..23)", f);
+        }
+    }
+    CHECK(max_glide_dirty <= 32u,
+          "Expected Act IV upward glide to dirty <=32 rows/frame for 60fps SPI DMA (got %u)", max_glide_dirty);
+
+    /* 3. Frame 68 transitions seamlessly to main UI with full docked bar + 12-frame post-dock decay */
+    adrift_input_state_t in_idle;
+    memset(&in_idle, 0, sizeof(in_idle));
+    in_idle.master_pot   = -1;
+    in_idle.cpu_load_pct = 7u;
+    adrift_dirty_t dirty;
+    adrift_dirty_clear(&dirty);
+    adrift_app_tick_ui(&in_idle, fb, &dirty);
+    CHECK(!ui->boot_active && dirty.full_redraw && ui->boot_bar_decay == 11u && ui->prev_meter_w == 230u &&
+          fb[22u * ADRIFT_SCREEN_W + 234u] == g1_gold,
+          "Expected frame 68 UI reveal to preserve full 230px docked Gold bar (decay=%u, w=%u)",
+          ui->boot_bar_decay, ui->prev_meter_w);
+
+    for (uint32_t d = 0u; d < 12u; d++) {
+        adrift_dirty_clear(&dirty);
+        adrift_app_tick_ui(&in_idle, fb, &dirty);
+        uint32_t drows = 0u;
+        for (uint32_t y = 0u; y < ADRIFT_SCREEN_H; y++) {
+            if ((dirty.row_mask[y >> 5] & (1u << (y & 31u))) != 0u) drows++;
+        }
+        CHECK(!dirty.full_redraw && drows == 3u,
+              "Expected 3-row micro-dirty decay on post-dock frame %u (got full=%d rows=%u)",
+              d, dirty.full_redraw, drows);
+    }
+    CHECK(ui->boot_bar_decay == 0u && ui->prev_meter_w == 0u,
+          "Expected post-dock BBD bar decay to settle to 0 (decay=%u, w=%u)",
+          ui->boot_bar_decay, ui->prev_meter_w);
+
+    /* 4. Zero-Delay Play-Through: Button press, Encoder turn, and MIDI Note On during boot */
+    /* 4a. Button press mid-boot opens FX screen on that exact tick */
+    adrift_app_init();
+    ui = adrift_app_get_ui();
+    s  = adrift_app_get_synth();
+    for (uint32_t i = 0u; i < 8u; i++) {
+        adrift_dirty_clear(&dirty);
+        adrift_app_tick_ui(&in_idle, fb, &dirty);
+    }
+    CHECK(ui->boot_active && ui->boot_frame == 8u, "Mid-boot before FX button");
+    adrift_input_state_t in_btn = in_idle;
+    in_btn.buttons_pressed = ADRIFT_BTN_FX;
+    in_btn.buttons_down    = ADRIFT_BTN_FX;
+    adrift_dirty_clear(&dirty);
+    adrift_app_tick_ui(&in_btn, fb, &dirty);
+    CHECK(!ui->boot_active && ui->in_fx_menu && dirty.full_redraw,
+          "FX button during boot must dismiss splash AND open FX menu without swallowing press");
+
+    /* 4b. Encoder turn mid-boot updates parameter on that exact tick */
+    adrift_app_init();
+    ui = adrift_app_get_ui();
+    s  = adrift_app_get_synth();
+    int16_t orig_g2_morph = s->groups[1].patch.exc.wave_morph;
+    adrift_dirty_clear(&dirty);
+    adrift_app_tick_ui(&in_idle, fb, &dirty);
+    adrift_input_state_t in_enc = in_idle;
+    in_enc.enc_delta[ADRIFT_ENC_SELECT] = 1; /* G1 -> G2 */
+    in_enc.enc_delta[ADRIFT_ENC_KNOB1]  = 5; /* Edit G2 Wave Morph */
+    adrift_dirty_clear(&dirty);
+    adrift_app_tick_ui(&in_enc, fb, &dirty);
+    CHECK(!ui->boot_active && s->edit_group == 1u && s->groups[1].patch.exc.wave_morph != orig_g2_morph,
+          "Encoder turn during boot must dismiss splash AND apply delta immediately");
+
+    /* 4c. Incoming MIDI Note On mid-boot sounds immediately on audio block 0 AND dismisses boot UI */
+    adrift_app_init();
+    ui = adrift_app_get_ui();
+    s  = adrift_app_get_synth();
+    for (uint32_t i = 0u; i < 5u; i++) {
+        adrift_dirty_clear(&dirty);
+        adrift_app_tick_ui(&in_idle, fb, &dirty);
+    }
+    adrift_midi_msg_t note_on = { 0x90u, 60u, 112u, 0u };
+    adrift_headless_render(pcm, 512u, &note_on, 1u);
+    double note_rms = compute_rms_dbfs(pcm, 0u, 512u);
+    CHECK(note_rms > -42.0 && s->any_gate,
+          "MIDI Note On during boot must sound immediately without latency/swallowing (rms=%.1f dBFS)", note_rms);
+    adrift_dirty_clear(&dirty);
+    adrift_app_tick_ui(&in_idle, fb, &dirty);
+    CHECK(!ui->boot_active && dirty.full_redraw && s->any_gate,
+          "Active MIDI voice must dismiss boot splash on next UI tick");
+
+    free(pcm);
+    free(fb_ref);
+    free(fb_prev);
+    free(fb);
+    printf("  -> PASS (68 Frames Bit-Exact, MaxDirty=%u, GlideDirty=%u, Seamless Dock & Zero-Delay Play-Through)\n",
+           max_inc_dirty, max_glide_dirty);
+}

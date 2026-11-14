@@ -79,6 +79,9 @@ export class AdriftEmulator {
     this.activeGroup = 0;
     this.pendingWorkletMsgs = [];
     this.heldPianoCodes = new Set();
+    this.previewRaf = 0;
+    this.previewBootFrame = 0;
+    this.previewCompleted = false;
 
     this.midiAccess = null;
     this.selectedMidiId = 'all';
@@ -109,6 +112,74 @@ export class AdriftEmulator {
 
     this._bindKeyboard();
     this._initOptionalWebMidi();
+    this._startBootPreview();
+  }
+
+  _stopBootPreview() {
+    if (this.previewRaf) {
+      cancelAnimationFrame(this.previewRaf);
+      this.previewRaf = 0;
+    }
+  }
+
+  _startBootPreview() {
+    this.wasmBytesPromise
+      .then((wasmBytes) => WebAssembly.instantiate(wasmBytes, {}))
+      .then((res) => {
+        if (this.startingPromise || this.workletNode) return;
+        const inst = res.instance || res;
+        const ex = inst.exports;
+        const mem = ex.memory;
+
+        ex.adrift_web_storage_reset_ram();
+        if (this.flashBytes && this.flashBytes.byteLength) {
+          const ptr = ex.adrift_web_storage_ptr();
+          const cap = ex.adrift_web_storage_len();
+          new Uint8Array(mem.buffer, ptr, cap).set(
+            this.flashBytes.subarray(0, Math.min(this.flashBytes.length, cap))
+          );
+        }
+        ex.adrift_web_init();
+
+        let settleTicks = 15;
+        let lastMs = 0;
+        const step = (now) => {
+          this.previewRaf = 0;
+          if (this.startingPromise || this.workletNode) return;
+          if (lastMs === 0 || now - lastMs >= 14.5) {
+            lastMs = now;
+            ex.adrift_web_tick_ui(8);
+            const bf = ex.adrift_web_boot_frame ? (ex.adrift_web_boot_frame() >>> 0) : 0;
+            this.previewBootFrame = bf > 0 ? bf : 68;
+
+            const rgbaPtr = ex.adrift_web_rgba_ptr();
+            const rgbaCopy = new Uint8ClampedArray(mem.buffer, rgbaPtr, 240 * 240 * 4).slice();
+            this.panel.updateFromWorklet({
+              rgba: rgbaCopy.buffer,
+              btnLeds: ex.adrift_web_leds_buttons() >>> 0,
+              keyLeds: 0,
+              activeGroup: ex.adrift_web_active_group() >>> 0,
+              activePreset: ex.adrift_web_active_preset() >>> 0,
+              inSaveMenu: false,
+              bootFrame: bf,
+            });
+
+            if (bf === 0) {
+              this.previewCompleted = true;
+              if (settleTicks > 0) {
+                settleTicks--;
+              } else {
+                return;
+              }
+            }
+          }
+          this.previewRaf = requestAnimationFrame(step);
+        };
+        this.previewRaf = requestAnimationFrame(step);
+      })
+      .catch(() => {
+        // Ignore preview errors; ensureStarted() reports any real load failure.
+      });
   }
 
   _loadLocalFlash() {
@@ -170,6 +241,10 @@ export class AdriftEmulator {
       return this.startingPromise;
     }
 
+    const resumeBootFrame =
+      this.previewCompleted || this.pendingWorkletMsgs.length > 0 ? 68 : this.previewBootFrame;
+    this._stopBootPreview();
+
     this.startingPromise = (async () => {
       const AudioCtx = window.AudioContext || window.webkitAudioContext;
       if (!this.audioCtx) {
@@ -183,6 +258,7 @@ export class AdriftEmulator {
       await this.audioCtx.audioWorklet.addModule('./js/worklet.js');
 
       const initialFlashCopy = this.flashBytes.slice().buffer;
+      const initialBootFrame = this.pendingWorkletMsgs.length > 0 ? 68 : resumeBootFrame;
       const node = new AudioWorkletNode(this.audioCtx, 'adrift-processor', {
         numberOfInputs: 0,
         numberOfOutputs: 1,
@@ -190,6 +266,7 @@ export class AdriftEmulator {
         processorOptions: {
           wasmBytes,
           initialFlash: initialFlashCopy,
+          initialBootFrame,
         },
       });
 

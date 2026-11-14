@@ -39,6 +39,7 @@ ui/ui
 ui/ui_draw
 ui/ui_params
 ui/ui_panes
+ui/ui_boot
 app
 "
 
@@ -265,7 +266,7 @@ build_fw() {
         need_build external/felucca-bsp/chip/fm1_cpu1.S $OUT_REL/obj/fm1_cpu1.o && \
             rx $CC -c external/felucca-bsp/chip/fm1_cpu1.S -o $OUT_REL/obj/fm1_cpu1.o
 
-        for f in dsp/dsp_tables dsp/exciter dsp/envelope dsp/filters dsp/bbd dsp/fx synth/synth synth/voice synth/arp synth/midi ui/ui ui/ui_draw ui/ui_panes; do
+        for f in dsp/dsp_tables dsp/exciter dsp/envelope dsp/filters dsp/bbd dsp/fx synth/synth synth/voice synth/arp synth/midi ui/ui ui/ui_draw ui/ui_panes ui/ui_boot; do
             o=\$(echo \"\$f\" | tr '/' '_')
             if need_build \"src/\${f}.c\" \"$OUT_REL/obj/\${o}.o\"; then
                 rx $CC -O2 $FW_COMMON -c \"src/\${f}.c\" -o \"$OUT_REL/obj/\${o}.o\"
@@ -296,6 +297,7 @@ build_fw() {
             $OUT_REL/obj/synth_midi.o \
             $OUT_REL/obj/ui_ui.o $OUT_REL/obj/ui_ui_draw.o \
             $OUT_REL/obj/ui_ui_params.o $OUT_REL/obj/ui_ui_panes.o \
+            $OUT_REL/obj/ui_ui_boot.o \
             $OUT_REL/obj/app.o $OUT_REL/obj/platform_fm1.o \
             /opt/jieli/pi32v2/lib/r3/libcompiler_rt.a \
             -o $OUT_REL/adrift.elf
@@ -412,7 +414,7 @@ build_release() {
     rx "$CC_BIN" -target pi32v2 -c "$BSP/chip/fm1_isr.S" -o "$OUT/obj/fm1_isr.o"
     rx "$CC_BIN" -target pi32v2 -c "$BSP/chip/fm1_cpu1.S" -o "$OUT/obj/fm1_cpu1.o"
 
-    for f in dsp/dsp_tables dsp/exciter dsp/envelope dsp/filters dsp/bbd dsp/fx synth/synth synth/voice synth/arp synth/midi ui/ui ui/ui_draw ui/ui_panes; do
+    for f in dsp/dsp_tables dsp/exciter dsp/envelope dsp/filters dsp/bbd dsp/fx synth/synth synth/voice synth/arp synth/midi ui/ui ui/ui_draw ui/ui_panes ui/ui_boot; do
         o="$(echo "$f" | tr '/' '_')"
         rx "$CC_BIN" -target pi32v2 -O2 $FW_COMMON -c "$ROOT/src/${f}.c" -o "$OUT/obj/${o}.o"
     done
@@ -437,6 +439,7 @@ build_release() {
         "$OUT/obj/synth_midi.o" \
         "$OUT/obj/ui_ui.o" "$OUT/obj/ui_ui_draw.o" \
         "$OUT/obj/ui_ui_params.o" "$OUT/obj/ui_ui_panes.o" \
+        "$OUT/obj/ui_ui_boot.o" \
         "$OUT/obj/app.o" "$OUT/obj/platform_fm1.o" \
         "$LIBCRT" \
         -o "$OUT/adrift.elf"

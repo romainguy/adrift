@@ -328,6 +328,7 @@ static void render_half(int32_t *dma_out) {
 
     int16_t pcm16[HALF_WORDS];
     adrift_app_audio_block(pcm16, HALF_FRAMES, events, nev);
+    adrift_app_mix_line_out(pcm16, HALF_FRAMES);
 
     /* Convert signed 16-bit PCM -> signed Q23 in low 24 bits (-8388608..8388607) */
     for (uint32_t i = 0; i < HALF_WORDS; i++) {
@@ -640,24 +641,42 @@ static void app_main(void) {
             if (cur_notes != 0u && adrift_app_get_ui()->boot_active) {
                 adrift_ui_dismiss_boot(adrift_app_get_ui());
             }
-            const adrift_synth_t *s_kbd = adrift_app_get_synth();
+            const adrift_synth_t   *s_kbd  = adrift_app_get_synth();
+            const adrift_ui_t      *ui_kbd = adrift_app_get_ui();
+            adrift_screen_reader_t *sr_kbd = adrift_app_get_screen_reader();
             uint8_t  ch_nib = (uint8_t)((adrift_synth_active_group(s_kbd)->midi_channel - 1u) & 0x0Fu);
             uint32_t diff   = cur_notes ^ prev_notes;
-            for (uint32_t k = 0; k < 27u; k++) {
-                if (diff & (1u << k)) {
-                    if (cur_notes & (1u << k)) {
-                        int32_t n = adrift_synth_map_kbd_key(s_kbd, (int32_t)k - 7);
+            for (int32_t k = 26; k >= 0; k--) {
+                uint32_t bit = (1u << (uint32_t)k);
+                if (diff & bit) {
+                    bool is_down  = (cur_notes & bit) != 0u;
+                    bool rel_bk11 = false;
+                    bool consumed = adrift_sr_handle_panel_key(sr_kbd, ui_kbd, s_kbd,
+                                                               (uint8_t)k, is_down, &rel_bk11);
+                    if (rel_bk11 && key_note[ADRIFT_SR_KEY_MOD_BK11] <= 127u) {
+                        kbd_midi_push((uint8_t)(0x80u | key_chan[ADRIFT_SR_KEY_MOD_BK11]),
+                                      key_note[ADRIFT_SR_KEY_MOD_BK11], 0u);
+                        key_note[ADRIFT_SR_KEY_MOD_BK11] = 0xFFu;
+                        sounding_keys &= ~(1u << ADRIFT_SR_KEY_MOD_BK11);
+                    }
+                    if (is_down) {
+                        if (consumed) {
+                            key_note[k] = 0xFFu;
+                            sounding_keys &= ~bit;
+                            continue;
+                        }
+                        int32_t n = adrift_synth_map_kbd_key(s_kbd, k - 7);
                         if (n >= 0) {
                             key_note[k] = (uint8_t)n;
                             key_chan[k] = ch_nib;
-                            sounding_keys |= (1u << k);
+                            sounding_keys |= bit;
                             kbd_midi_push((uint8_t)(0x90u | ch_nib), (uint8_t)n, 100u);
                         } else {
                             key_note[k] = 0xFFu;
-                            sounding_keys &= ~(1u << k);
+                            sounding_keys &= ~bit;
                         }
                     } else {
-                        sounding_keys &= ~(1u << k);
+                        sounding_keys &= ~bit;
                         if (key_note[k] <= 127u) {
                             kbd_midi_push((uint8_t)(0x80u | key_chan[k]), key_note[k], 0u);
                             key_note[k] = 0xFFu;

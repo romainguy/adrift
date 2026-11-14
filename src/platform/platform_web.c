@@ -272,9 +272,26 @@ WASM_EXPORT void adrift_web_panel_key(uint8_t key_idx, uint8_t down, uint8_t vel
     if (key_idx >= 27u) {
         return;
     }
-    const adrift_synth_t *s = adrift_app_get_synth();
+    const adrift_synth_t   *s  = adrift_app_get_synth();
+    adrift_ui_t            *ui = adrift_app_get_ui();
+    adrift_screen_reader_t *sr = adrift_app_get_screen_reader();
     if (down) {
-        adrift_ui_dismiss_boot(adrift_app_get_ui());
+        adrift_ui_dismiss_boot(ui);
+    }
+    bool rel_bk11 = false;
+    bool consumed = adrift_sr_handle_panel_key(sr, ui, s, key_idx, down != 0u, &rel_bk11);
+    if (rel_bk11 && g_key_note[ADRIFT_SR_KEY_MOD_BK11] <= 127u) {
+        queue_midi((uint8_t)(0x80u | g_key_chan[ADRIFT_SR_KEY_MOD_BK11]),
+                   g_key_note[ADRIFT_SR_KEY_MOD_BK11], 0u);
+        g_key_note[ADRIFT_SR_KEY_MOD_BK11] = 0xFFu;
+        g_sounding_keys &= ~(1u << ADRIFT_SR_KEY_MOD_BK11);
+    }
+    if (down) {
+        if (consumed) {
+            g_key_note[key_idx] = 0xFFu;
+            g_sounding_keys &= ~(1u << key_idx);
+            return;
+        }
         if (g_key_note[key_idx] <= 127u) {
             queue_midi((uint8_t)(0x80u | g_key_chan[key_idx]), g_key_note[key_idx], 0u);
             g_key_note[key_idx] = 0xFFu;
@@ -489,6 +506,7 @@ WASM_EXPORT void adrift_web_render_audio(uint32_t frames) {
         done += blk;
     }
     g_midi_len = 0u;
+    adrift_app_mix_line_out(g_pcm_i16, frames);
 
     const float inv_32768 = 1.0f / 32768.0f;
     for (uint32_t i = 0u; i < frames; i++) {

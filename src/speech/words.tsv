@@ -1,0 +1,198 @@
+# SPDX-License-Identifier: MPL-2.0
+# Adrift M-VAVE FM-1 Screen Reader Expansion Table (words.tsv)
+# Maps short on-screen labels, patch names, preset names, and musical tokens
+# to full spoken English words (longest multi-token match wins, case-insensitive).
+
+# Multi-word UI, Patch, Preset & Scale Phrases
+ACOUST GUIT	acoustic guitar
+AUTO FEEDBK	auto feedback
+MANDOLIN LP	mandolin loop
+MISTERY PLK	mystery pluck
+RANDOM PLK	random pluck
+INF DRONE	infinite drone
+STRUM DLY 1	strum delay 1
+STRUM DLY 2	strum delay 2
+STRUM DLY 3	strum delay 3
+SLOWPAD PWM	slow pad pulse width
+SLOWPAD SHM	slow pad shimmer
+MELANCH KEY	melancholy key
+MELANCH HLO	melancholy halo
+GLITTER LP	glitter loop
+RND PLUCK A	random pluck A
+RND PLUCK B	random pluck B
+OVERDUB SWL	overdub swell
+GRAIN DLY	grain delay
+SITAR JAWAR	sitar jawari
+SITAR JAWARI	sitar jawari
+CLAVINET D6	clavinet D 6
+CLAVINET FN	clavinet funk
+BBD CHORUS	bucket brigade chorus
+INTO VOID	into the void
+7TH OVERDUB	seventh overdub
+16V MONSTER	16 voice monster
+5 DRUMKITS	5 drum kits
+DRONE + LEAD	drone plus lead
+INIT PATCH	initial patch
+INIT SYNTH	initialize synth
+INIT GROUP	initialize group
+NAT MINOR	natural minor
+MIN PENTA	minor pentatonic
+MAJ PENTA	major pentatonic
+HARM MINOR	harmonic minor
+MEL MINOR	melodic minor
+PHRYG DOM	phrygian dominant
+A NATURAL	A natural
+A HARMONIC	A harmonic
+A MELODIC	A melodic
+A BLUES	A blues
+A WHOLE	A whole
+A HIRAJOSHI	A hirajoshi
+VCO LV	oscillator level
+VCO PT	oscillator pitch
+BBD PT	bucket brigade pitch
+FB AMT	feedback amount
+ALL PT	all pitch
+EX MIX	exciter mix
+EX LVL	exciter level
+SH CLK	sample and hold clock
+S&H CK	sample and hold clock
+IN LPF	input low pass
+IN RES	input resonance
+FB LPF	feedback low pass
+DRYWET	dry wet mix
+DRY/WET	dry wet mix
+VEL SN	velocity sensitivity
+GRP LV	group level
+DLY TM	delay time
+DLY FB	delay feedback
+DLY MX	delay mix
+RVB SZ	reverb size
+RVB DM	reverb damping
+RVB MX	reverb mix
+E1 ATK	envelope 1 attack
+E1 DEC	envelope 1 decay
+E1 SUS	envelope 1 sustain
+E1 REL	envelope 1 release
+E1 DLY	envelope 1 onset delay
+L1 WAV	L F O 1 wave
+L1 RT	L F O 1 rate
+L1 DEP	L F O 1 depth
+L1 DST	L F O 1 destination
+L2 WAV	L F O 2 wave
+L2 RT	L F O 2 rate
+L2 DEP	L F O 2 depth
+L2 DST	L F O 2 destination
+L3 WAV	L F O 3 wave
+L3 RT	L F O 3 rate
+L3 DEP	L F O 3 depth
+L3 DST	L F O 3 destination
+MW DEP	mod wheel depth
+LFO1 W	L F O 1 wave
+LFO1 R	L F O 1 rate
+LFO1 D	L F O 1 depth
+LFO1 >	L F O 1 destination
+LFO2 W	L F O 2 wave
+LFO2 R	L F O 2 rate
+LFO2 D	L F O 2 depth
+LFO2 >	L F O 2 destination
+LFO3 W	L F O 3 wave
+LFO3 R	L F O 3 rate
+LFO3 D	L F O 3 depth
+LFO3 >	L F O 3 destination
+MW DPT	mod wheel depth
+A-D	attack decay
+D-A-D	delay attack decay
+INV-1O	invert minus 1 octave
+INV+0O	invert key pitch
+INV+PC	inverted pitch compensated
+UP/DN	up down
+DN/UP	down up
+UP&DN	up and down
+1-2X	1 to 2 times
+1-3X	1 to 3 times
+1-4X	1 to 4 times
+KEY VEL	key velocity
+X-Y	X Y
+
+# Single-token UI, Screen & Synth Abbreviations
+EXC	exciter
+ENV1	envelope 1
+ENV2	envelope 2
+BBD	bucket brigade
+MOD	modulation
+FX	effects
+ARP	arpeggiator
+SEQ	group settings
+SCOPE	oscilloscope
+VECT	vectorscope
+SPEC	spectrum
+STAGE	soundstage
+POLY	polyphony
+PERF	performance
+PWM	pulse width
+VCO	oscillator
+VCA	amplifier
+SEMI	semitone
+KEYTRK	keytrack
+ATK	attack
+DEC	decay
+SUS	sustain
+SUSTN	sustain
+REL	release
+RELEAS	release
+ONSET	onset delay
+VEL	velocity sensitivity
+FEEDBK	feedback
+DISPR	dispersion
+CONVRG	converge
+DIVERG	diverge
+LFO	L F O
+LFO1	L F O 1
+LFO2	L F O 2
+LFO3	L F O 3
+S&H	sample and hold
+ALGO	algorithm
+RATCH	ratchet
+D.TIME	delay time
+D.FDBK	delay feedback
+D.MIX	delay mix
+R.SIZE	reverb size
+R.DAMP	reverb damping
+SHIMMR	shimmer
+R.MIX	reverb mix
+COMP	compressor mix
+THRESH	threshold
+C.ATK	compressor attack
+MAKEUP	makeup gain
+GONI	goniometer
+SPLT	split
+WTRF	waterfall
+FLD	field
+VEC	vectors
+HRM	harmonic
+TRI	triangle
+SQR	square
+DASH	dashboard
+ACOUST	acoustic
+GUIT	guitar
+MISTERY	mystery
+PLK	pluck
+INF	infinite
+DLY	delay
+SLOWPAD	slow pad
+SHM	shimmer
+MELANCH	melancholy
+HLO	halo
+RND	random
+SWL	swell
+JAWAR	jawari
+DRUMKITS	drum kits
+INIT	initial
+OCT+	octave plus
+OCT-	octave minus
+BPM	beats per minute
+HZ	hertz
+KHZ	kilohertz
+MS	milliseconds
+DB	decibels
+ST	semitones

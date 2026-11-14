@@ -237,6 +237,7 @@ static void sdl_audio_cb(void *userdata, Uint8 *stream, int len) {
         adrift_app_audio_block(out + 2u * done, chunk, evs, nev);
         done += chunk;
     }
+    adrift_app_mix_line_out(out, total_frames);
 
     uint64_t dt = SDL_GetPerformanceCounter() - t0;
     double elapsed_s = (double)dt / (double)SDL_GetPerformanceFrequency();
@@ -405,6 +406,28 @@ int main(int argc, char **argv) {
                     if (cmd_ctrl && !ev.key.repeat && ev.key.keysym.scancode == SDL_SCANCODE_S) {
                         click_pulse_btn |= ADRIFT_BTN_SAVE_PRESET;
                         break;
+                    }
+                    if (!ev.key.repeat) {
+                        SDL_Scancode fsc = ev.key.keysym.scancode;
+                        if (fsc == SDL_SCANCODE_F1) {
+                            adrift_ui_dismiss_boot(adrift_app_get_ui());
+                            adrift_sr_toggle(adrift_app_get_screen_reader(),
+                                             adrift_app_get_ui(),
+                                             adrift_app_get_synth());
+                            break;
+                        } else if (fsc == SDL_SCANCODE_F2) {
+                            adrift_ui_dismiss_boot(adrift_app_get_ui());
+                            adrift_sr_speak_where(adrift_app_get_screen_reader(),
+                                                  adrift_app_get_ui(),
+                                                  adrift_app_get_synth());
+                            break;
+                        } else if (fsc == SDL_SCANCODE_F3) {
+                            adrift_sr_adjust_speed(adrift_app_get_screen_reader(), -1);
+                            break;
+                        } else if (fsc == SDL_SCANCODE_F4) {
+                            adrift_sr_adjust_speed(adrift_app_get_screen_reader(), 1);
+                            break;
+                        }
                     }
 
                     if (in_save) {

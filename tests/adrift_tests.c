@@ -28,6 +28,7 @@ int main(int argc, char **argv) {
     test_extended_mod_targets();
     test_user_presets_and_save_ui();
     test_boot_animation();
+    run_speech_tests();
 
     if (g_failures > 0) {
         fprintf(stderr, "=== FAILED (%d check(s) failed) ===\n", g_failures);

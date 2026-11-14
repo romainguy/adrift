@@ -35,6 +35,9 @@ synth/preset_store
 synth/voice
 synth/arp
 synth/midi
+speech/klatt
+speech/tts
+speech/screen_reader
 ui/ui
 ui/ui_draw
 ui/ui_params
@@ -48,6 +51,7 @@ adrift_tests
 test_dsp
 test_groups_ui
 test_midi_arp_fx
+test_speech
 "
 
 HOST_WARN="-std=c99 -Wall -Wextra -Werror -Wno-unused-parameter"
@@ -90,13 +94,14 @@ build_test() {
     fi
 
     NEWEST_HDR="$(ls -t "$ROOT"/src/*.h "$ROOT"/src/*/*.h "$ROOT"/tests/*.h 2>/dev/null | head -n 1)"
-    OBJS=""
+    CORE_OBJS=""
+    TEST_OBJS=""
     PIDS=""
 
     for m in $CORE_MODULES platform/platform_headless; do
         src="$ROOT/src/${m}.c"
         obj="$OBJ_DIR/$(echo "$m" | tr '/' '_').o"
-        OBJS="$OBJS $obj"
+        CORE_OBJS="$CORE_OBJS $obj"
         if need_host_build "$src" "$obj"; then
             "$HCC" $HOST_WARN -O2 -g $SAN_FLAGS -I"$ROOT/src" -c "$src" -o "$obj" &
             PIDS="$PIDS $!"
@@ -106,19 +111,31 @@ build_test() {
     for t in $TEST_MODULES; do
         src="$ROOT/tests/${t}.c"
         obj="$OBJ_DIR/test_${t}.o"
-        OBJS="$OBJS $obj"
+        TEST_OBJS="$TEST_OBJS $obj"
         if need_host_build "$src" "$obj"; then
             "$HCC" $HOST_WARN -O2 -g $SAN_FLAGS -I"$ROOT/src" -c "$src" -o "$obj" &
             PIDS="$PIDS $!"
         fi
     done
 
+    dump_src="$ROOT/tests/dump_speech.c"
+    dump_obj="$OBJ_DIR/test_dump_speech.o"
+    if need_host_build "$dump_src" "$dump_obj"; then
+        "$HCC" $HOST_WARN -O2 -g $SAN_FLAGS -I"$ROOT/src" -c "$dump_src" -o "$dump_obj" &
+        PIDS="$PIDS $!"
+    fi
+
     for pid in $PIDS; do
         wait "$pid"
     done
 
-    "$HCC" $HOST_WARN -O2 -g $SAN_FLAGS $OBJS -lm -o "$OUT/adrift_tests"
+    "$HCC" $HOST_WARN -O2 -g $SAN_FLAGS $CORE_OBJS $TEST_OBJS -lm -o "$OUT/adrift_tests"
+    "$HCC" $HOST_WARN -O2 -g $SAN_FLAGS $CORE_OBJS "$dump_obj" -lm -o "$OUT/dump_speech"
     ASAN_OPTIONS="${ASAN_OPTIONS:-detect_leaks=0}" "$OUT/adrift_tests" "$OUT"
+    ASAN_OPTIONS="${ASAN_OPTIONS:-detect_leaks=0}" "$OUT/dump_speech" "$OUT/said.tsv"
+    if command -v node >/dev/null 2>&1; then
+        node "$ROOT/tools/audit.mjs" "$OUT/said.tsv"
+    fi
 }
 
 build_sdl() {
@@ -266,14 +283,14 @@ build_fw() {
         need_build external/felucca-bsp/chip/fm1_cpu1.S $OUT_REL/obj/fm1_cpu1.o && \
             rx $CC -c external/felucca-bsp/chip/fm1_cpu1.S -o $OUT_REL/obj/fm1_cpu1.o
 
-        for f in dsp/dsp_tables dsp/exciter dsp/envelope dsp/filters dsp/bbd dsp/fx synth/synth synth/voice synth/arp synth/midi ui/ui ui/ui_draw ui/ui_panes ui/ui_boot; do
+        for f in dsp/dsp_tables dsp/exciter dsp/envelope dsp/filters dsp/bbd dsp/fx synth/synth synth/voice synth/arp synth/midi speech/klatt ui/ui ui/ui_draw ui/ui_panes ui/ui_boot; do
             o=\$(echo \"\$f\" | tr '/' '_')
             if need_build \"src/\${f}.c\" \"$OUT_REL/obj/\${o}.o\"; then
                 rx $CC -O2 $FW_COMMON -c \"src/\${f}.c\" -o \"$OUT_REL/obj/\${o}.o\"
             fi
         done
 
-        for f in synth/presets synth/preset_store ui/ui_params app; do
+        for f in synth/presets synth/preset_store speech/tts speech/screen_reader ui/ui_params app; do
             o=\$(echo \"\$f\" | tr '/' '_')
             if need_build \"src/\${f}.c\" \"$OUT_REL/obj/\${o}.o\"; then
                 rx $CC -Os $FW_COMMON -c \"src/\${f}.c\" -o \"$OUT_REL/obj/\${o}.o\"
@@ -295,6 +312,8 @@ build_fw() {
             $OUT_REL/obj/synth_preset_store.o \
             $OUT_REL/obj/synth_voice.o $OUT_REL/obj/synth_arp.o \
             $OUT_REL/obj/synth_midi.o \
+            $OUT_REL/obj/speech_klatt.o $OUT_REL/obj/speech_tts.o \
+            $OUT_REL/obj/speech_screen_reader.o \
             $OUT_REL/obj/ui_ui.o $OUT_REL/obj/ui_ui_draw.o \
             $OUT_REL/obj/ui_ui_params.o $OUT_REL/obj/ui_ui_panes.o \
             $OUT_REL/obj/ui_ui_boot.o \
@@ -414,12 +433,12 @@ build_release() {
     rx "$CC_BIN" -target pi32v2 -c "$BSP/chip/fm1_isr.S" -o "$OUT/obj/fm1_isr.o"
     rx "$CC_BIN" -target pi32v2 -c "$BSP/chip/fm1_cpu1.S" -o "$OUT/obj/fm1_cpu1.o"
 
-    for f in dsp/dsp_tables dsp/exciter dsp/envelope dsp/filters dsp/bbd dsp/fx synth/synth synth/voice synth/arp synth/midi ui/ui ui/ui_draw ui/ui_panes ui/ui_boot; do
+    for f in dsp/dsp_tables dsp/exciter dsp/envelope dsp/filters dsp/bbd dsp/fx synth/synth synth/voice synth/arp synth/midi speech/klatt ui/ui ui/ui_draw ui/ui_panes ui/ui_boot; do
         o="$(echo "$f" | tr '/' '_')"
         rx "$CC_BIN" -target pi32v2 -O2 $FW_COMMON -c "$ROOT/src/${f}.c" -o "$OUT/obj/${o}.o"
     done
 
-    for f in synth/presets synth/preset_store ui/ui_params app; do
+    for f in synth/presets synth/preset_store speech/tts speech/screen_reader ui/ui_params app; do
         o="$(echo "$f" | tr '/' '_')"
         rx "$CC_BIN" -target pi32v2 -Os $FW_COMMON -c "$ROOT/src/${f}.c" -o "$OUT/obj/${o}.o"
     done
@@ -437,6 +456,8 @@ build_release() {
         "$OUT/obj/synth_preset_store.o" \
         "$OUT/obj/synth_voice.o" "$OUT/obj/synth_arp.o" \
         "$OUT/obj/synth_midi.o" \
+        "$OUT/obj/speech_klatt.o" "$OUT/obj/speech_tts.o" \
+        "$OUT/obj/speech_screen_reader.o" \
         "$OUT/obj/ui_ui.o" "$OUT/obj/ui_ui_draw.o" \
         "$OUT/obj/ui_ui_params.o" "$OUT/obj/ui_ui_panes.o" \
         "$OUT/obj/ui_ui_boot.o" \

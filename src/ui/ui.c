@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: MPL-2.0
  * 240x240 RGB565 UI State Machine, Header, Full-Screen Scope & Preset Browser */
 
+#include "../app.h"
 #include "ui_internal.h"
 
 static bool compute_group_gate(const adrift_synth_t *s, uint8_t g) {
@@ -1370,14 +1371,18 @@ void adrift_ui_step(adrift_ui_t *ui,
     }
 
     /* 1. Handle screen & action button edges */
+    adrift_screen_reader_t *sr = adrift_app_get_screen_reader();
     uint32_t pressed = input->buttons_pressed;
     if (pressed & ADRIFT_BTN_SAVE_PRESET) {
         if (ui->in_save_menu) {
             cancel_save_menu_if_open(ui);
+            adrift_sr_say(sr, ADRIFT_SR_PRIO_NOW, ADRIFT_SR_CAT_ACTION, "Save canceled.");
         } else if (ui->in_preset_menu && ui->preset_cursor >= ADRIFT_UI_PRESET_FACT_COUNT) {
             open_save_preset_menu(ui, synth, (int32_t)(ui->preset_cursor - ADRIFT_UI_PRESET_FACT_COUNT));
+            adrift_sr_announce_save_open(sr, ui);
         } else {
             open_save_preset_menu(ui, synth, -1);
+            adrift_sr_announce_save_open(sr, ui);
         }
         header_dirty = top_dirty = cards_dirty = true;
     }
@@ -1394,6 +1399,7 @@ void adrift_ui_step(adrift_ui_t *ui,
             ui->in_fx_menu     = false;
             ui->scope_page     = 0u;
         }
+        adrift_sr_announce_screen(sr, ui, synth, false);
         header_dirty = top_dirty = cards_dirty = true;
     }
     if (pressed & ADRIFT_BTN_GROUP_CFG) {
@@ -1409,6 +1415,7 @@ void adrift_ui_step(adrift_ui_t *ui,
             ui->in_fx_menu     = false;
             ui->subpage        = 0u;
         }
+        adrift_sr_announce_screen(sr, ui, synth, false);
         header_dirty = top_dirty = cards_dirty = true;
     }
     if (pressed & ADRIFT_BTN_ARP) {
@@ -1424,6 +1431,7 @@ void adrift_ui_step(adrift_ui_t *ui,
             ui->in_fx_menu     = false;
             ui->subpage        = 0u;
         }
+        adrift_sr_announce_screen(sr, ui, synth, false);
         header_dirty = top_dirty = cards_dirty = true;
     }
     if (pressed & ADRIFT_BTN_FX) {
@@ -1439,13 +1447,14 @@ void adrift_ui_step(adrift_ui_t *ui,
             ui->in_fx_menu     = true;
             ui->subpage        = 0u;
         }
+        adrift_sr_announce_screen(sr, ui, synth, false);
         header_dirty = top_dirty = cards_dirty = true;
     }
-    if (pressed & ADRIFT_BTN_PAGE_1) { select_or_cycle_param_page(ui, synth, 0u); header_dirty = top_dirty = cards_dirty = true; }
-    if (pressed & ADRIFT_BTN_PAGE_2) { select_or_cycle_param_page(ui, synth, 1u); header_dirty = top_dirty = cards_dirty = true; }
-    if (pressed & ADRIFT_BTN_PAGE_3) { select_or_cycle_param_page(ui, synth, 2u); header_dirty = top_dirty = cards_dirty = true; }
-    if (pressed & ADRIFT_BTN_PAGE_4) { select_or_cycle_param_page(ui, synth, 3u); header_dirty = top_dirty = cards_dirty = true; }
-    if (pressed & ADRIFT_BTN_PAGE_5) { select_or_cycle_param_page(ui, synth, 4u); header_dirty = top_dirty = cards_dirty = true; }
+    if (pressed & ADRIFT_BTN_PAGE_1) { select_or_cycle_param_page(ui, synth, 0u); adrift_sr_announce_screen(sr, ui, synth, false); header_dirty = top_dirty = cards_dirty = true; }
+    if (pressed & ADRIFT_BTN_PAGE_2) { select_or_cycle_param_page(ui, synth, 1u); adrift_sr_announce_screen(sr, ui, synth, false); header_dirty = top_dirty = cards_dirty = true; }
+    if (pressed & ADRIFT_BTN_PAGE_3) { select_or_cycle_param_page(ui, synth, 2u); adrift_sr_announce_screen(sr, ui, synth, false); header_dirty = top_dirty = cards_dirty = true; }
+    if (pressed & ADRIFT_BTN_PAGE_4) { select_or_cycle_param_page(ui, synth, 3u); adrift_sr_announce_screen(sr, ui, synth, false); header_dirty = top_dirty = cards_dirty = true; }
+    if (pressed & ADRIFT_BTN_PAGE_5) { select_or_cycle_param_page(ui, synth, 4u); adrift_sr_announce_screen(sr, ui, synth, false); header_dirty = top_dirty = cards_dirty = true; }
 
     if (pressed & ADRIFT_BTN_NEXT_GROUP) {
         adrift_synth_cycle_edit_group(synth);
@@ -1453,39 +1462,64 @@ void adrift_ui_step(adrift_ui_t *ui,
             (ui->preset_cursor == 1u || (ui->preset_load_grp && ui->preset_previewed))) {
             apply_preset_cursor_selection(ui, synth);
         }
+        adrift_sr_announce_group_select(sr, synth);
         header_dirty = top_dirty = cards_dirty = true;
     }
     if (pressed & ADRIFT_BTN_PREV_PST) {
+        bool was_save   = ui->in_save_menu;
+        bool was_preset = ui->in_preset_menu;
         open_or_scroll_preset_menu(ui, synth, -1);
+        if (was_save) {
+            adrift_sr_announce_save_slot(sr, ui);
+        } else {
+            adrift_sr_announce_preset_row(sr, ui, synth, !was_preset);
+        }
         header_dirty = top_dirty = cards_dirty = true;
     }
     if (pressed & ADRIFT_BTN_NEXT_PST) {
+        bool was_save   = ui->in_save_menu;
+        bool was_preset = ui->in_preset_menu;
         open_or_scroll_preset_menu(ui, synth, 1);
+        if (was_save) {
+            adrift_sr_announce_save_slot(sr, ui);
+        } else {
+            adrift_sr_announce_preset_row(sr, ui, synth, !was_preset);
+        }
         header_dirty = top_dirty = cards_dirty = true;
     }
     if (pressed & ADRIFT_BTN_OCT_DOWN) {
         if (ui->in_save_menu) {
             cancel_save_menu_if_open(ui);
+            adrift_sr_say(sr, ADRIFT_SR_PRIO_NOW, ADRIFT_SR_CAT_ACTION, "Save canceled.");
             header_dirty = top_dirty = cards_dirty = true;
         } else if (ui->in_preset_menu) {
             cancel_preset_menu_if_open(ui, synth);
+            adrift_sr_say(sr, ADRIFT_SR_PRIO_NOW, ADRIFT_SR_CAT_ACTION, "Presets canceled.");
             header_dirty = top_dirty = cards_dirty = true;
         } else if (ui->in_scale_menu) {
             cancel_scale_menu_if_open(ui, synth);
+            adrift_sr_say(sr, ADRIFT_SR_PRIO_NOW, ADRIFT_SR_CAT_ACTION, "Scales canceled.");
             header_dirty = top_dirty = cards_dirty = true;
         } else {
-            if (synth->kbd_octave > -3) synth->kbd_octave--;
-            header_dirty = true;
+            if (synth->kbd_octave > -3) {
+                synth->kbd_octave--;
+                adrift_sr_announce_octave(sr, synth->kbd_octave, 0);
+                header_dirty = true;
+            } else {
+                adrift_sr_announce_octave(sr, synth->kbd_octave, -1);
+            }
         }
     }
     if (pressed & ADRIFT_BTN_OCT_UP) {
         if (ui->in_save_menu) {
             uint8_t slot = ui->save_slot % ADRIFT_NUM_USER_PRESETS;
-            if (adrift_synth_save_user_preset(synth, slot, ui->save_name)) {
+            bool ok = adrift_synth_save_user_preset(synth, slot, ui->save_name);
+            if (ok) {
                 ui->save_toast_slot   = slot;
                 ui->save_toast_frames = 45u;
             }
             ui->in_save_menu = false;
+            adrift_sr_announce_save_result(sr, slot, ui->save_name, ok);
             header_dirty = top_dirty = cards_dirty = true;
         } else if (ui->in_preset_menu) {
             uint8_t cur_log = ui->preset_cursor % ADRIFT_UI_PRESET_ALL_COUNT;
@@ -1497,36 +1531,51 @@ void adrift_ui_step(adrift_ui_t *ui,
                 }
                 ui->preset_clear_armed = false;
                 apply_preset_cursor_selection(ui, synth);
+                adrift_sr_announce_preset_confirm(sr, cur_log, false, 0u, 0u, true, ux);
             } else if (preset_logical_is_empty_user(cur_log)) {
                 uint8_t ux = (uint8_t)(cur_log - ADRIFT_UI_PRESET_FACT_COUNT);
                 open_save_preset_menu(ui, synth, (int32_t)ux);
+                adrift_sr_announce_save_open(sr, ui);
             } else {
+                bool    grp_load = ui->preset_load_grp;
+                uint8_t src_g    = ui->preset_src_grp;
+                uint8_t dst_g    = synth->edit_group;
                 if (!ui->preset_previewed) {
                     apply_preset_cursor_selection(ui, synth);
                 }
                 ui->in_preset_menu     = false;
                 ui->preset_previewed   = false;
                 ui->preset_clear_armed = false;
+                adrift_sr_announce_preset_confirm(sr, cur_log, grp_load, src_g, dst_g, false, 0u);
             }
             header_dirty = top_dirty = cards_dirty = true;
         } else if (ui->in_scale_menu) {
             synth->kbd_scale    = (uint8_t)(ui->scale_cursor % ADRIFT_NUM_SCALES);
             ui->in_scale_menu   = false;
             ui->scale_previewed = false;
+            adrift_sr_announce_scale_confirm(sr, synth);
             header_dirty = top_dirty = cards_dirty = true;
         } else {
-            if (synth->kbd_octave < 3) synth->kbd_octave++;
-            header_dirty = true;
+            if (synth->kbd_octave < 3) {
+                synth->kbd_octave++;
+                adrift_sr_announce_octave(sr, synth->kbd_octave, 0);
+                header_dirty = true;
+            } else {
+                adrift_sr_announce_octave(sr, synth->kbd_octave, 1);
+            }
         }
     }
     if (pressed & ADRIFT_BTN_PANIC) {
         adrift_synth_all_notes_off(synth, true);
         ui->sound_hold_frames = 0u;
+        adrift_sr_say(sr, ADRIFT_SR_PRIO_NOW, ADRIFT_SR_CAT_ACTION, "All notes off.");
         header_dirty = top_dirty = cards_dirty = true;
     }
     if ((pressed & ADRIFT_BTN_HOLD) && !ui->in_preset_menu && !ui->in_scale_menu && !ui->in_save_menu) {
         bool cur_hold = adrift_synth_view_patch(synth)->env2.drone_hold;
         apply_encoder_for_synth(synth, false, false, false, 3u, 6u, cur_hold ? -1 : 1);
+        adrift_sr_say(sr, ADRIFT_SR_PRIO_NOW, ADRIFT_SR_CAT_ACTION,
+                      adrift_synth_view_patch(synth)->env2.drone_hold ? "Drone hold." : "Drone gated.");
         header_dirty = top_dirty = cards_dirty = true;
     }
 
@@ -1543,14 +1592,24 @@ void adrift_ui_step(adrift_ui_t *ui,
             (ui->preset_cursor == 1u || (ui->preset_load_grp && ui->preset_previewed))) {
             apply_preset_cursor_selection(ui, synth);
         }
+        adrift_sr_announce_group_select(sr, synth);
         header_dirty = top_dirty = cards_dirty = true;
     }
     if (input->enc_delta[ADRIFT_ENC_PRESETS] != 0) {
+        bool was_save   = ui->in_save_menu;
+        bool was_preset = ui->in_preset_menu;
         open_or_scroll_preset_menu(ui, synth, input->enc_delta[ADRIFT_ENC_PRESETS]);
+        if (was_save) {
+            adrift_sr_announce_save_slot(sr, ui);
+        } else {
+            adrift_sr_announce_preset_row(sr, ui, synth, !was_preset);
+        }
         header_dirty = top_dirty = cards_dirty = true;
     }
     if (input->enc_delta[ADRIFT_ENC_ALGORITHM] != 0) {
+        bool was_scale = ui->in_scale_menu;
         open_or_scroll_scale_menu(ui, synth, input->enc_delta[ADRIFT_ENC_ALGORITHM]);
+        adrift_sr_announce_scale_row(sr, synth, !was_scale);
         header_dirty = top_dirty = cards_dirty = true;
     }
 
@@ -1565,10 +1624,12 @@ void adrift_ui_step(adrift_ui_t *ui,
             int32_t cnt  = (int32_t)ADRIFT_NUM_USER_PRESETS;
             int32_t step = (int32_t)d0 % cnt;
             ui->save_slot = (uint8_t)(((int32_t)(ui->save_slot % ADRIFT_NUM_USER_PRESETS) + step + cnt) % cnt);
+            adrift_sr_announce_save_slot(sr, ui);
             top_dirty = cards_dirty = true;
         }
         if (d1 != 0) {
             ui->save_cursor = (uint8_t)dsp_clamp_i32((int32_t)ui->save_cursor + (int32_t)d1, 0, 11);
+            adrift_sr_announce_save_cursor(sr, ui, false);
             top_dirty = cards_dirty = true;
         }
         if (d2 != 0) {
@@ -1578,6 +1639,7 @@ void adrift_ui_step(adrift_ui_t *ui,
             int32_t step = (int32_t)d2 % SAVE_CHARSET_COUNT;
             int32_t next = (idx + step + SAVE_CHARSET_COUNT) % SAVE_CHARSET_COUNT;
             ui->save_name[c] = k_save_charset[next];
+            adrift_sr_announce_save_cursor(sr, ui, true);
             top_dirty = cards_dirty = true;
         }
         if (d3 > 0) {
@@ -1586,12 +1648,14 @@ void adrift_ui_step(adrift_ui_t *ui,
                 ui->save_name[i] = ' ';
             }
             ui->save_name[12] = '\0';
+            adrift_sr_announce_save_edit(sr, ui, "Cleared to end.");
             top_dirty = cards_dirty = true;
         } else if (d3 < 0) {
             for (uint32_t i = 0u; i <= 12u; i++) {
                 ui->save_name[i] = ui->save_orig_name[i];
             }
             ui->save_cursor = 0u;
+            adrift_sr_announce_save_edit(sr, ui, "Name restored.");
             top_dirty = cards_dirty = true;
         }
 
@@ -1599,20 +1663,25 @@ void adrift_ui_step(adrift_ui_t *ui,
             switch (input->text_cmd) {
                 case ADRIFT_TEXT_CMD_LEFT:
                     if (ui->save_cursor > 0u) ui->save_cursor--;
+                    adrift_sr_announce_save_cursor(sr, ui, false);
                     break;
                 case ADRIFT_TEXT_CMD_RIGHT:
                     if (ui->save_cursor < 11u) ui->save_cursor++;
+                    adrift_sr_announce_save_cursor(sr, ui, false);
                     break;
                 case ADRIFT_TEXT_CMD_BACKSPACE:
                     save_modal_backspace(ui);
+                    adrift_sr_announce_save_edit(sr, ui, "Character deleted.");
                     break;
                 case ADRIFT_TEXT_CMD_DELETE:
                     save_modal_delete_at(ui);
+                    adrift_sr_announce_save_edit(sr, ui, "Character deleted.");
                     break;
                 case ADRIFT_TEXT_CMD_CLEAR:
                     for (uint32_t i = 0u; i < 12u; i++) ui->save_name[i] = ' ';
                     ui->save_name[12] = '\0';
                     ui->save_cursor   = 0u;
+                    adrift_sr_announce_save_edit(sr, ui, "Name cleared.");
                     break;
                 default:
                     break;
@@ -1624,6 +1693,7 @@ void adrift_ui_step(adrift_ui_t *ui,
             if (ci >= 0) {
                 uint8_t c = ui->save_cursor % 12u;
                 ui->save_name[c] = k_save_charset[ci];
+                adrift_sr_announce_save_cursor(sr, ui, false);
                 if (c < 11u) ui->save_cursor = (uint8_t)(c + 1u);
                 top_dirty = cards_dirty = true;
             }
@@ -1657,6 +1727,7 @@ void adrift_ui_step(adrift_ui_t *ui,
                 }
                 apply_preset_cursor_selection(ui, synth);
             }
+            adrift_sr_announce_preset_bank(sr, ui, synth);
             header_dirty = top_dirty = cards_dirty = true;
         }
         if (d1 != 0) {
@@ -1680,22 +1751,33 @@ void adrift_ui_step(adrift_ui_t *ui,
                 }
                 header_dirty = top_dirty = cards_dirty = true;
             }
+            adrift_sr_announce_preset_load_mode(sr, ui, synth);
         }
-        if (d2 != 0 && ui->preset_load_grp) {
-            uint8_t next_src = (uint8_t)dsp_clamp_i32((int32_t)ui->preset_src_grp + (int32_t)d2,
-                                                      0, (int32_t)ADRIFT_MAX_GROUPS - 1);
-            if (next_src != ui->preset_src_grp) {
-                ui->preset_src_grp     = next_src;
-                ui->preset_clear_armed = false;
-                if (ui->preset_cursor >= 2u && !preset_logical_is_empty_user(ui->preset_cursor)) {
-                    apply_preset_cursor_selection(ui, synth);
+        if (d2 != 0) {
+            if (!ui->preset_load_grp) {
+                adrift_sr_announce_preset_src_grp(sr, ui, true);
+            } else {
+                uint8_t next_src = (uint8_t)dsp_clamp_i32((int32_t)ui->preset_src_grp + (int32_t)d2,
+                                                          0, (int32_t)ADRIFT_MAX_GROUPS - 1);
+                if (next_src != ui->preset_src_grp) {
+                    ui->preset_src_grp     = next_src;
+                    ui->preset_clear_armed = false;
+                    if (ui->preset_cursor >= 2u && !preset_logical_is_empty_user(ui->preset_cursor)) {
+                        apply_preset_cursor_selection(ui, synth);
+                    }
+                    header_dirty = top_dirty = cards_dirty = true;
                 }
-                header_dirty = top_dirty = cards_dirty = true;
+                adrift_sr_announce_preset_src_grp(sr, ui, false);
             }
         }
-        if (d3 != 0 && preset_logical_is_occ_user(ui->preset_cursor)) {
-            ui->preset_clear_armed = (d3 > 0);
-            top_dirty = cards_dirty = true;
+        if (d3 != 0) {
+            if (preset_logical_is_occ_user(ui->preset_cursor)) {
+                ui->preset_clear_armed = (d3 > 0);
+                adrift_sr_announce_preset_clear_arm(sr, ui, ui->preset_clear_armed, false);
+                top_dirty = cards_dirty = true;
+            } else {
+                adrift_sr_announce_preset_clear_arm(sr, ui, false, true);
+            }
         }
     } else if (ui->in_scale_menu) {
         int8_t root_delta = input->enc_delta[ADRIFT_ENC_KNOB1];
@@ -1705,6 +1787,12 @@ void adrift_ui_step(adrift_ui_t *ui,
             ui->scale_previewed   = true;
             top_dirty             = true;
             cards_dirty           = true;
+            adrift_sr_announce_scale_root(sr, synth);
+        }
+        for (uint8_t k = 1u; k < ADRIFT_NUM_PARAM_KNOBS; k++) {
+            if (input->enc_delta[k] != 0) {
+                adrift_sr_announce_unused_knob(sr, k, "Turn algorithm knob for scale or knob 1 for root.");
+            }
         }
     } else if (ui->in_scope && !ui->in_preset_menu) {
         for (uint8_t k = 0; k < ADRIFT_NUM_PARAM_KNOBS; k++) {
@@ -1730,6 +1818,7 @@ void adrift_ui_step(adrift_ui_t *ui,
                     break;
                 }
             }
+            adrift_sr_announce_home_knob(sr, ui, k);
             top_dirty = true;
         }
     } else if (!ui->in_scope && !ui->in_preset_menu) {
@@ -1741,7 +1830,10 @@ void adrift_ui_step(adrift_ui_t *ui,
             uint8_t param_idx = (uint8_t)((ui->subpage % num_sub) * 4u + k);
             if (!ui->in_group_menu && !ui->in_arp_menu && !ui->in_fx_menu &&
                 is_unmapped_param_slot(ui->page, param_idx)) {
-                /* Unmapped cells are empty */
+                const char *hint = (ui->page == 0u) ? "Press S E L for other exciter controls."
+                                 : (ui->page == 3u) ? "Press edit for other envelope 2 controls."
+                                                    : "Press global for other modulation controls.";
+                adrift_sr_announce_unused_knob(sr, k, hint);
                 continue;
             }
 
@@ -1756,6 +1848,21 @@ void adrift_ui_step(adrift_ui_t *ui,
                     if (ag->unison_detune == 0 && input->enc_delta[3] == 0) ag->unison_detune = 370;
                     if (ag->stereo_spread == 0 && input->enc_delta[2] == 0) ag->stereo_spread = 820;
                 }
+            }
+            if (ui->in_group_menu) {
+                uint8_t cur_nv = adrift_synth_active_group(synth)->num_voices;
+                if (param_idx == 0u && delta > 0 && cur_nv == prev_nv && cur_nv < ADRIFT_MAX_VOICES) {
+                    adrift_sr_say(sr, ADRIFT_SR_PRIO_KEEP, ADRIFT_SR_CAT_WARNING,
+                                  "Cannot add voices, all 16 are in use. Lower voices in another group first.");
+                } else {
+                    adrift_sr_announce_group_knob(sr, ui, synth, k);
+                }
+            } else if (ui->in_arp_menu) {
+                adrift_sr_announce_arp_knob(sr, ui, synth, k);
+            } else if (ui->in_fx_menu) {
+                adrift_sr_announce_fx_knob(sr, ui, synth, k);
+            } else {
+                adrift_sr_announce_main_knob(sr, ui, synth, k);
             }
             cards_dirty = true;
             top_dirty   = true;

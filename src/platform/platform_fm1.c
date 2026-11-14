@@ -13,7 +13,7 @@
 #define FELUCCA_UAC_48K          1
 #define FELUCCA_UAC_MIDI_LAST    1
 #define FELUCCA_UAC_DEEP         1
-#define FELUCCA_ID               "FM-1_462000200"
+#define FELUCCA_ID               "FM-1_462000300"
 #define FELUCCA_USB_PID          0x0003
 #define FELUCCA_USB_MANUFACTURER "Adrift Synth"
 #define FELUCCA_USB_PRODUCT      "Adrift FM-1"

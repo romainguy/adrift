@@ -379,6 +379,24 @@ static void trigger_voice_on(adrift_synth_t *s, uint8_t g, uint8_t v, uint8_t no
     adrift_group_t *gp = &s->groups[g];
     bool was_active    = vc->active;
 
+    /* Polyphonic portamento: when Round-Robin allocates an idle voice with glide > 2,
+     * seed its portamento origin from the group's most recently triggered voice (if any). */
+    if (!was_active && gp->patch.bbd.glide > 2 && !adrift_group_is_stacked(gp->assign_mode)) {
+        uint32_t best_prev_age = 0u;
+        int      best_prev_v   = -1;
+        for (uint8_t u = 0; u < ADRIFT_MAX_VOICES; u++) {
+            if (s->voices[u].owner_group == (int8_t)g &&
+                s->voices[u].bbd.pitch_initialized && s->voices[u].age > best_prev_age) {
+                best_prev_age = s->voices[u].age;
+                best_prev_v   = (int)u;
+            }
+        }
+        if (best_prev_v >= 0) {
+            vc->bbd.slew_pitch_q16    = s->voices[best_prev_v].bbd.slew_pitch_q16;
+            vc->bbd.pitch_initialized = true;
+        }
+    }
+
     vc->active    = true;
     vc->key_down  = true;
     vc->sustained = false;

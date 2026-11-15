@@ -40,8 +40,8 @@ typedef struct {
     uint32_t              noise_rng;        /* Thermal/clock noise seed for organic self-oscillation */
     int32_t               peak_wet_q15;     /* Peak wet level for UI BBD energy meter */
     bool                  delay_cache_valid;
-    int32_t               last_delay_pitch_q8;
-    int32_t               last_sounding_pitch_q8;
+    int32_t               last_delay_pitch_q16;
+    int32_t               last_sounding_pitch_q16;
     int16_t               last_fb_cut;
     int16_t               last_disp_k;
 } adrift_bbd_t;
@@ -49,7 +49,23 @@ typedef struct {
 void adrift_bbd_init(adrift_bbd_t *bbd, uint8_t voice_idx);
 void adrift_bbd_reset(adrift_bbd_t *bbd);
 
+/* Frame-invariant portamento pitch stepper (returns rounded Q8 pitch; retains Q16 sub-cent state) */
+int32_t adrift_bbd_step_glide(adrift_bbd_t *bbd,
+                              int16_t glide,
+                              int32_t target_note_pitch_q8,
+                              uint32_t frames);
+
 /* Control-rate update of pitch target, filter cutoffs, and analytical phase-delay compensation */
+void adrift_bbd_prepare_block_ex(adrift_bbd_t *bbd,
+                                 const adrift_bbd_params_t *p,
+                                 int32_t target_note_pitch_q8,
+                                 int32_t mod_pitch_q8,
+                                 int32_t mod_fb_1023,
+                                 int32_t mod_fb_cutoff_1023,
+                                 uint32_t frames,
+                                 int32_t *out_target_fb_q14,
+                                 bool step_glide);
+
 void adrift_bbd_prepare_block(adrift_bbd_t *bbd,
                               const adrift_bbd_params_t *p,
                               int32_t target_note_pitch_q8,

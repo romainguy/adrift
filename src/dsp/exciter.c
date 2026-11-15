@@ -45,7 +45,7 @@ void adrift_exciter_init(adrift_exciter_t *exc, uint8_t voice_idx) {
 
     exc->vco_gain_q15    = 0;
     exc->noise_gain_q15  = 0;
-    exc->last_pitch_q8   = -0x7FFFFFFF;
+    exc->last_pitch_q16  = -0x7FFFFFFF;
     exc->last_sh_rate    = -1;
 }
 
@@ -102,38 +102,43 @@ DSP_ALWAYS_INLINE int32_t polyblep_edge_q15(uint32_t phase_diff, uint32_t dt, ui
     return 0;
 }
 
-void adrift_exciter_prepare_block(adrift_exciter_t *exc,
-                                  const adrift_exciter_params_t *p,
-                                  int32_t base_note_pitch_q8,
-                                  int32_t mod_pitch_q8,
-                                  int32_t mod_wave_1023,
-                                  int32_t mod_pw_1023,
-                                  int16_t *out_morph_1023) {
+void adrift_exciter_prepare_block_q16(adrift_exciter_t *exc,
+                                      const adrift_exciter_params_t *p,
+                                      int32_t base_note_pitch_q16,
+                                      int32_t mod_pitch_q8,
+                                      int32_t mod_wave_1023,
+                                      int32_t mod_pw_1023,
+                                      int16_t *out_morph_1023) {
     /* 1. Block-rate Ornstein-Uhlenbeck thermal drift (~689 Hz update rate) */
     int32_t drift_amt = dsp_clamp_i32(p->analog_drift, 0, 1023);
-    int32_t wn1 = dsp_white_noise_q15(&exc->rng_state);
-    int32_t wn2 = dsp_white_noise_q15(&exc->rng_state);
-    exc->drift_pitch_q16 -= (exc->drift_pitch_q16 >> 9); /* ~0.75 s mean-reversion tau */
-    exc->drift_pitch_q16 += (wn1 * drift_amt) >> 11;
-    exc->drift_pw_q15    -= (exc->drift_pw_q15 >> 8);
-    exc->drift_pw_q15    += (wn2 * drift_amt) >> 16;
+    if (drift_amt == 0) {
+        exc->drift_pitch_q16 = 0;
+        exc->drift_pw_q15    = 0;
+    } else {
+        int32_t wn1 = dsp_white_noise_q15(&exc->rng_state);
+        int32_t wn2 = dsp_white_noise_q15(&exc->rng_state);
+        exc->drift_pitch_q16 -= (exc->drift_pitch_q16 >> 9); /* ~0.75 s mean-reversion tau */
+        exc->drift_pitch_q16 += (wn1 * drift_amt) >> 11;
+        exc->drift_pw_q15    -= (exc->drift_pw_q15 >> 8);
+        exc->drift_pw_q15    += (wn2 * drift_amt) >> 16;
+    }
 
-    /* 2. Compute VCO pitch in Q8 semitones */
-    int32_t pitch_q8 = p->vco_keytrack ? base_note_pitch_q8 : (60 << 8);
-    pitch_q8 += ((int32_t)p->vco_octave * 12 + (int32_t)p->vco_semi) * 256;
+    /* 2. Compute VCO pitch in Q16 semitones (0.0015 cent resolution for smooth portamento & drift) */
+    int32_t pitch_q16 = p->vco_keytrack ? base_note_pitch_q16 : (60 << 16);
+    pitch_q16 += ((int32_t)p->vco_octave * 12 + (int32_t)p->vco_semi) * 65536;
     int32_t fine = (int32_t)p->vco_fine;
     if (fine >= -100 && fine <= 100) {
-        pitch_q8 += (fine >= 0) ? ((fine * 41944) >> 14) : -(((-fine) * 41944) >> 14);
+        pitch_q16 += (fine >= 0) ? ((fine * 41943 + 32) >> 6) : -(((-fine) * 41943 + 32) >> 6);
     } else {
-        pitch_q8 += (fine * 256) / 100;
+        pitch_q16 += (fine * 65536) / 100;
     }
-    pitch_q8 += mod_pitch_q8;
-    pitch_q8 += ((int32_t)exc->trim_pitch_q8 * drift_amt) >> 9;
-    pitch_q8 += exc->drift_pitch_q16 >> 15; /* up to ~+-6 cents at max analog_drift */
+    pitch_q16 += mod_pitch_q8 * 256;
+    pitch_q16 += ((int32_t)exc->trim_pitch_q8 * drift_amt) >> 1;
+    pitch_q16 += exc->drift_pitch_q16 >> 7; /* up to ~+-6 cents at max analog_drift */
 
-    if (pitch_q8 != exc->last_pitch_q8) {
-        exc->last_pitch_q8 = pitch_q8;
-        uint32_t inc = dsp_pitch_to_phase_inc(pitch_q8);
+    if (pitch_q16 != exc->last_pitch_q16) {
+        exc->last_pitch_q16 = pitch_q16;
+        uint32_t inc = dsp_pitch_q16_to_phase_inc(pitch_q16);
         exc->vco_inc = inc;
 
         uint32_t dt16 = inc >> 16;
@@ -164,6 +169,17 @@ void adrift_exciter_prepare_block(adrift_exciter_t *exc,
             exc->sh_inc = dsp_pitch_to_phase_inc(sh_pitch_q8);
         }
     }
+}
+
+void adrift_exciter_prepare_block(adrift_exciter_t *exc,
+                                  const adrift_exciter_params_t *p,
+                                  int32_t base_note_pitch_q8,
+                                  int32_t mod_pitch_q8,
+                                  int32_t mod_wave_1023,
+                                  int32_t mod_pw_1023,
+                                  int16_t *out_morph_1023) {
+    adrift_exciter_prepare_block_q16(exc, p, base_note_pitch_q8 * 256, mod_pitch_q8,
+                                     mod_wave_1023, mod_pw_1023, out_morph_1023);
 }
 
 DSP_ALWAYS_INLINE int32_t exciter_vco_sample(uint32_t phase,

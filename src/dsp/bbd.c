@@ -42,33 +42,55 @@ void adrift_bbd_reset(adrift_bbd_t *bbd) {
     bbd->disp_y2           = 0;
     bbd->dc_cap_q23        = 0;
     bbd->peak_wet_q15      = 0;
+    bbd->pitch_initialized = false;
     bbd->delay_cache_valid = false;
 }
 
-void adrift_bbd_prepare_block(adrift_bbd_t *bbd,
-                              const adrift_bbd_params_t *p,
+int32_t adrift_bbd_step_glide(adrift_bbd_t *bbd,
+                              int16_t glide,
                               int32_t target_note_pitch_q8,
-                              int32_t mod_pitch_q8,
-                              int32_t mod_fb_1023,
-                              int32_t mod_fb_cutoff_1023,
-                              uint32_t frames,
-                              int32_t *out_target_fb_q14) {
-    /* 1a. Frame-invariant Portamento / Glide on base note pitch */
+                              uint32_t frames) {
     int32_t dest_q16 = target_note_pitch_q8 * 256;
-    if (!bbd->pitch_initialized || p->glide <= 2) {
+    if (!bbd->pitch_initialized || glide <= 2) {
         bbd->slew_pitch_q16    = dest_q16;
         bbd->pitch_initialized = true;
     } else if (frames > 0u) {
-        /* Exponential pitch slew: glide 3..1023 -> ~5 ms .. ~2.5 s, scaled by sub-block frames */
-        int32_t g         = dsp_clamp_i32(p->glide, 3, 1023);
-        int32_t g_inv     = 1026 - g; /* 3..1023 */
-        int32_t rate_q15  = 18 + (((g_inv * g_inv) >> 10) * 16000 >> 10);
-        int32_t f_clamped = (frames > 256u) ? 256 : (int32_t)frames;
-        int32_t step_q16  = (rate_q15 * f_clamped + 16) >> 5; /* == rate_q15 << 1 when frames == 64 */
-        if (step_q16 < 1) step_q16 = 1;
-        if (step_q16 > 65536) step_q16 = 65536;
-        int32_t diff      = dest_q16 - bbd->slew_pitch_q16;
-        bbd->slew_pitch_q16 += dsp_mul_q16(diff, step_q16);
+        int32_t diff = dest_q16 - bbd->slew_pitch_q16;
+        if (diff != 0) {
+            /* Exponential pitch slew: glide 3..1023 -> ~5 ms .. ~2.5 s, scaled by sub-block frames.
+             * Symmetric minimum 1-ULP step prevents IIR truncation deadband on upward/sub-block glides. */
+            int32_t g         = dsp_clamp_i32(glide, 3, 1023);
+            int32_t g_inv     = 1026 - g; /* 3..1023 */
+            int32_t rate_q15  = 18 + (((g_inv * g_inv) >> 10) * 16000 >> 10);
+            int32_t f_clamped = (frames > 256u) ? 256 : (int32_t)frames;
+            int32_t step_q16  = (rate_q15 * f_clamped + 16) >> 5; /* == rate_q15 << 1 when frames == 64 */
+            if (step_q16 < 1) step_q16 = 1;
+            if (step_q16 > 65536) step_q16 = 65536;
+
+            int32_t adiff = (diff < 0) ? -diff : diff;
+            int32_t delta = dsp_mul_q16(adiff, step_q16);
+            if (delta < 1) delta = 1;
+            if (delta > adiff) delta = adiff;
+            bbd->slew_pitch_q16 += (diff < 0) ? -delta : delta;
+        }
+    }
+    return (bbd->slew_pitch_q16 >= 0)
+               ? ((bbd->slew_pitch_q16 + 128) >> 8)
+               : -(((-bbd->slew_pitch_q16) + 128) >> 8);
+}
+
+void adrift_bbd_prepare_block_ex(adrift_bbd_t *bbd,
+                                 const adrift_bbd_params_t *p,
+                                 int32_t target_note_pitch_q8,
+                                 int32_t mod_pitch_q8,
+                                 int32_t mod_fb_1023,
+                                 int32_t mod_fb_cutoff_1023,
+                                 uint32_t frames,
+                                 int32_t *out_target_fb_q14,
+                                 bool step_glide) {
+    /* 1a. Frame-invariant Portamento / Glide on base note pitch */
+    if (step_glide) {
+        (void)adrift_bbd_step_glide(bbd, p->glide, target_note_pitch_q8, frames);
     }
 
     /* 1b. MN3101-style BBD analog clock oscillator Ornstein-Uhlenbeck thermal wander */
@@ -81,34 +103,37 @@ void adrift_bbd_prepare_block(adrift_bbd_t *bbd,
         bbd->clk_drift_q16 += (wn * noise_k) >> 12;
     }
 
-    int32_t pitch_q8 = (bbd->slew_pitch_q16 >> 8) + mod_pitch_q8 + (bbd->clk_drift_q16 >> 15);
+    int32_t pitch_q16 = bbd->slew_pitch_q16 + (mod_pitch_q8 * 256) + (bbd->clk_drift_q16 >> 7);
     /* Optional +1 octave delay halving when Invert is active so hollow odd harmonics stay at key pitch */
-    int32_t delay_pitch_q8 = (p->invert && p->invert_pitch_comp) ? (pitch_q8 + (12 << 8)) : pitch_q8;
+    int32_t delay_pitch_q16 = (p->invert && p->invert_pitch_comp) ? (pitch_q16 + (12 << 16)) : pitch_q16;
 
     /* Sounding fundamental frequency at which loop phase delay must equal 2*pi (or pi when inverted):
-     * - Normal mode: fundamental is at pitch_q8 (period = T_delay)
-     * - Invert w/o pitch comp: fundamental drops 1 octave to pitch_q8 - 12 semitones (period = 2 * T_delay)
-     * - Invert w/ +1 oct comp: fundamental stays at pitch_q8 (T_delay = T_0 / 2) */
-    int32_t sounding_pitch_q8 = (p->invert && !p->invert_pitch_comp) ? (pitch_q8 - (12 << 8)) : pitch_q8;
-    int32_t fb_cut            = dsp_clamp_i32((int32_t)p->fb_lpf_cutoff + mod_fb_cutoff_1023, 0, 960);
-    int32_t disp_k            = dsp_clamp_i32(p->dispersion, 0, 1023);
+     * - Normal mode: fundamental is at pitch_q16 (period = T_delay)
+     * - Invert w/o pitch comp: fundamental drops 1 octave to pitch_q16 - 12 semitones (period = 2 * T_delay)
+     * - Invert w/ +1 oct comp: fundamental stays at pitch_q16 (T_delay = T_0 / 2) */
+    int32_t sounding_pitch_q16 = (p->invert && !p->invert_pitch_comp) ? (pitch_q16 - (12 << 16)) : pitch_q16;
+    int32_t fb_cut             = dsp_clamp_i32((int32_t)p->fb_lpf_cutoff + mod_fb_cutoff_1023, 0, 960);
+    int32_t disp_k             = dsp_clamp_i32(p->dispersion, 0, 1023);
 
     const int32_t min_delay_q16 = 4 * 65536;
     const int32_t max_delay_q16 = (int32_t)(ADRIFT_BBD_BUF_LEN - 5u) * 65536;
 
     if (!bbd->delay_cache_valid ||
-        bbd->last_delay_pitch_q8    != delay_pitch_q8 ||
-        bbd->last_sounding_pitch_q8 != sounding_pitch_q8 ||
-        bbd->last_fb_cut            != (int16_t)fb_cut ||
-        bbd->last_disp_k            != (int16_t)disp_k) {
-        bbd->delay_cache_valid      = true;
-        bbd->last_delay_pitch_q8    = delay_pitch_q8;
-        bbd->last_sounding_pitch_q8 = sounding_pitch_q8;
-        bbd->last_fb_cut            = (int16_t)fb_cut;
-        bbd->last_disp_k            = (int16_t)disp_k;
+        bbd->last_delay_pitch_q16    != delay_pitch_q16 ||
+        bbd->last_sounding_pitch_q16 != sounding_pitch_q16 ||
+        bbd->last_fb_cut             != (int16_t)fb_cut ||
+        bbd->last_disp_k             != (int16_t)disp_k) {
+        bbd->delay_cache_valid       = true;
+        bbd->last_delay_pitch_q16    = delay_pitch_q16;
+        bbd->last_sounding_pitch_q16 = sounding_pitch_q16;
+        bbd->last_fb_cut             = (int16_t)fb_cut;
+        bbd->last_disp_k             = (int16_t)disp_k;
 
-        uint32_t raw_period_q16 = dsp_pitch_to_period_q16(delay_pitch_q8);
-        uint32_t f0_phase_inc   = dsp_pitch_to_phase_inc(sounding_pitch_q8);
+        uint32_t raw_period_q16 = dsp_pitch_q16_to_period_q16(delay_pitch_q16);
+        uint32_t f0_phase_inc   = dsp_pitch_q16_to_phase_inc(sounding_pitch_q16);
+        int32_t  delay_pitch_q8 = (delay_pitch_q16 >= 0)
+                                      ? ((delay_pitch_q16 + 128) >> 8)
+                                      : -(((-delay_pitch_q16) + 128) >> 8);
 
         /* 2. 6 dB/oct Feedback Low-Pass Filter bounded by 1024-stage MOSFET CTI ceiling (~14 kHz):
          * Even when the external feedback LPF is wide open (1023), cumulative Charge-Transfer
@@ -139,9 +164,9 @@ void adrift_bbd_prepare_block(adrift_bbd_t *bbd,
          * of the 0.43 Hz loop DC-blocker at the sounding fundamental so BBD pitch stays within < 1.5 cents! */
         uint32_t fb_lag_q16    = adrift_onepole_phase_delay_q16(bbd->fb_lpf.a_q15, f0_phase_inc);
         uint32_t clk_lag_q16   = adrift_onepole_phase_delay_q16(bbd->clk_lpf.a_q15, f0_phase_inc);
-        uint32_t t0_period_q16 = (sounding_pitch_q8 == delay_pitch_q8)
+        uint32_t t0_period_q16 = (sounding_pitch_q16 == delay_pitch_q16)
                                      ? raw_period_q16
-                                     : dsp_pitch_to_period_q16(sounding_pitch_q8);
+                                     : dsp_pitch_q16_to_period_q16(sounding_pitch_q16);
         uint32_t t0_int        = t0_period_q16 >> 16;
         if (t0_int > 4096u) t0_int = 4096u;
         uint32_t hpf_lead_q16  = (t0_int * t0_int * 13u) >> 7;
@@ -152,9 +177,9 @@ void adrift_bbd_prepare_block(adrift_bbd_t *bbd,
          * keeps the fundamental f0 locked in tune (< 1.5 cents) while stretching upper partials sharp! */
         uint32_t disp_lag_q16 = 0u;
         if (disp_k > 0) {
-            uint32_t delay_inc  = (delay_pitch_q8 == sounding_pitch_q8)
+            uint32_t delay_inc  = (delay_pitch_q16 == sounding_pitch_q16)
                                       ? f0_phase_inc
-                                      : dsp_pitch_to_phase_inc(delay_pitch_q8);
+                                      : dsp_pitch_q16_to_phase_inc(delay_pitch_q16);
             uint32_t omega0_q15 = ((delay_inc >> 16) * 402u) >> 7; /* 2*pi*f_delay/fs in Q15 */
             if (omega0_q15 < 64u) omega0_q15 = 64u;
             uint32_t inv_disp   = 1024u - (uint32_t)disp_k;
@@ -192,6 +217,18 @@ void adrift_bbd_prepare_block(adrift_bbd_t *bbd,
         fb_q14 = 16384 + (int32_t)(((uint32_t)(fb_k - 890) * 306739u) >> 14);
     }
     *out_target_fb_q14 = fb_q14;
+}
+
+void adrift_bbd_prepare_block(adrift_bbd_t *bbd,
+                              const adrift_bbd_params_t *p,
+                              int32_t target_note_pitch_q8,
+                              int32_t mod_pitch_q8,
+                              int32_t mod_fb_1023,
+                              int32_t mod_fb_cutoff_1023,
+                              uint32_t frames,
+                              int32_t *out_target_fb_q14) {
+    adrift_bbd_prepare_block_ex(bbd, p, target_note_pitch_q8, mod_pitch_q8,
+                                mod_fb_1023, mod_fb_cutoff_1023, frames, out_target_fb_q14, true);
 }
 
 DSP_ALWAYS_INLINE int32_t bbd_onepole_step(int32_t *state_q29, int32_t a_q15, int32_t x_q15) {

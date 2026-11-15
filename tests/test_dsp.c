@@ -510,6 +510,66 @@ void test_bbd_pitch_and_invert(void) {
     CHECK(slew_diff_st < 0.25,
           "Portamento glide depends on block size (64f vs 8f diff=%.3f semitones)", slew_diff_st);
 
+    /* 3b) Exact zero-deadband convergence on both upward and downward glides (even at 8-frame sub-blocks) */
+    for (uint32_t f = 0; f < 65536u; f += 64u) {
+        adrift_bbd_prepare_block(&bbd_64, &gp_cfg, 72 << 8, 0, 0, 0, 64u, &dummy_fb);
+    }
+    for (uint32_t f = 0; f < 65536u; f += 8u) {
+        adrift_bbd_prepare_block(&bbd_8,  &gp_cfg, 72 << 8, 0, 0, 0, 8u,  &dummy_fb);
+    }
+    CHECK(bbd_64.slew_pitch_q16 == (72 << 16) && bbd_8.slew_pitch_q16 == (72 << 16),
+          "Upward portamento stalled in IIR deadband (64f=%d, 8f=%d, expected=%d)",
+          bbd_64.slew_pitch_q16, bbd_8.slew_pitch_q16, 72 << 16);
+
+    /* 3c) Unified VCO + BBD portamento lockstep: Exciter VCO must glide continuously with BBD */
+    {
+        adrift_app_init();
+        adrift_synth_t *gs = adrift_app_get_synth();
+        adrift_patch_t *gp = &gs->groups[0].patch;
+        adrift_synth_set_group_voices(gs, 0u, 1u);
+        gs->groups[0].assign_mode = ADRIFT_GROUP_UNISON;
+        gp->legato           = true;
+        gp->bbd.glide        = 850;
+        gp->bbd.bbd_noise    = 0;
+        gp->exc.analog_drift = 0;
+        gp->exc.vco_level    = 900;
+        gp->exc.noise_level  = 0;
+        gp->exc.vco_octave   = 0;
+        gp->exc.vco_semi     = 0;
+        gp->exc.vco_fine     = 0;
+        gp->exc.vco_keytrack = true;
+        gp->env1.onset_delay = 0;
+        gp->env1.attack      = 0;
+        gp->env1.sustain     = 1023;
+        gp->env2.attack      = 0;
+        gp->env2.sustain     = 1023;
+        gp->lfo_depth        = 0;
+        gp->lfo2_depth       = 0;
+        gp->lfo3_depth       = 0;
+
+        uint8_t uv = 0u;
+        for (uint8_t k = 0u; k < ADRIFT_MAX_VOICES; k++) {
+            if (gs->voices[k].owner_group == 0) {
+                uv = k;
+                break;
+            }
+        }
+
+        adrift_synth_note_on(gs, 48u, 120u);
+        render_frames(pcm, 512u);
+        CHECK(gs->voices[uv].exc.last_pitch_q16 == (48 << 16) &&
+              gs->voices[uv].bbd.slew_pitch_q16 == (48 << 16),
+              "Initial note did not snap VCO and BBD to C3 (vco=%d, bbd=%d)",
+              gs->voices[uv].exc.last_pitch_q16, gs->voices[uv].bbd.slew_pitch_q16);
+
+        adrift_synth_note_on(gs, 60u, 120u);
+        render_frames(pcm, 2048u);
+        int32_t vco_p = gs->voices[uv].exc.last_pitch_q16;
+        int32_t bbd_p = gs->voices[uv].bbd.slew_pitch_q16;
+        CHECK(bbd_p > (50 << 16) && bbd_p < (58 << 16) && vco_p == bbd_p,
+              "Exciter VCO did not glide in lockstep with BBD (vco=%d, bbd=%d)", vco_p, bbd_p);
+    }
+
     /* 4) Unbiased zero-mean thermal noise & MN3101 clock wander */
     adrift_bbd_t bbd_nz;
     adrift_bbd_init(&bbd_nz, 1u);

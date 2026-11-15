@@ -55,7 +55,7 @@ typedef struct {
     int32_t  noise_gain_q15;
 
     /* Control-rate caches */
-    int32_t  last_pitch_q8;
+    int32_t  last_pitch_q16;
     int16_t  last_sh_rate;
 } adrift_exciter_t;
 
@@ -67,6 +67,15 @@ void adrift_exciter_trigger(adrift_exciter_t *exc,
                             uint8_t velocity,
                             bool legato,
                             uint8_t unison_slot);
+
+/* Control-rate update with Q16 sub-cent base pitch (called once per sub-block) */
+void adrift_exciter_prepare_block_q16(adrift_exciter_t *exc,
+                                      const adrift_exciter_params_t *p,
+                                      int32_t base_note_pitch_q16,
+                                      int32_t mod_pitch_q8,
+                                      int32_t mod_wave_1023,
+                                      int32_t mod_pw_1023,
+                                      int16_t *out_morph_1023);
 
 /* Control-rate update (called once per 64-sample block) */
 void adrift_exciter_prepare_block(adrift_exciter_t *exc,

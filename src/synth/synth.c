@@ -487,6 +487,12 @@ static void render_voice_list(adrift_synth_t *s,
                                        : 0;
         int32_t bbd_pitch_q8    = is_super ? (center_pitch_q8 + super_bbd_det_q8) : base_pitch_q8;
 
+        /* Advance unified voice portamento first so Exciter VCO(s) and BBD Resonator glide in lockstep */
+        adrift_bbd_params_t bbd_p = vp->bbd;
+        bbd_p.dispersion = (int16_t)dsp_clamp_i32((int32_t)vp->bbd.dispersion + m.dispr, 0, 1023);
+        (void)adrift_bbd_step_glide(&vc->bbd, bbd_p.glide, bbd_pitch_q8, frames);
+        int32_t porta_delta_q16 = vc->bbd.slew_pitch_q16 - (bbd_pitch_q8 * 256);
+
         int32_t eff_exc_lvl   = dsp_clamp_i32((int32_t)vp->exc.vco_level + m.ex_lvl, 0, 1023);
         int32_t eff_noise_mix = dsp_clamp_i32((int32_t)vp->exc.noise_level + m.ex_mix, 0, 1023);
 
@@ -549,9 +555,9 @@ static void render_voice_list(adrift_synth_t *s,
             uint32_t saved_vco_ph = vc->exc.vco_phase;
             uint32_t saved_sub_ph = vc->exc.sub_phase;
             uint32_t saved_imp_ph = vc->exc.impulse_phase;
-            adrift_exciter_prepare_block(&vc->exc, &slot_exc,
-                                         base_pitch_q8, m.vco_pitch_q8,
-                                         m.vco_morph, m.vco_pwm, &morph_1023);
+            adrift_exciter_prepare_block_q16(&vc->exc, &slot_exc,
+                                             (base_pitch_q8 * 256) + porta_delta_q16, m.vco_pitch_q8,
+                                             m.vco_morph, m.vco_pwm, &morph_1023);
             adrift_exciter_process(&vc->exc, &slot_exc, morph_1023, exc_buf, frames);
             if (hold_onset && slot_exc.pluck > 0) {
                 vc->exc.vco_phase     = saved_vco_ph;
@@ -584,9 +590,12 @@ static void render_voice_list(adrift_synth_t *s,
                     uint32_t w_vco_ph = vw->exc.vco_phase;
                     uint32_t w_sub_ph = vw->exc.sub_phase;
                     uint32_t w_imp_ph = vw->exc.impulse_phase;
-                    adrift_exciter_prepare_block(&vw->exc, &sub_exc,
-                                                 center_pitch_q8 + w_semi_q8 + w_detune_q8, w_mod.vco_pitch_q8,
-                                                 w_mod.vco_morph, w_mod.vco_pwm, &w_morph);
+                    int32_t  w_pitch_q16 = ((center_pitch_q8 + w_semi_q8 + w_detune_q8) * 256) + porta_delta_q16;
+                    vw->bbd.slew_pitch_q16    = w_pitch_q16;
+                    vw->bbd.pitch_initialized = true;
+                    adrift_exciter_prepare_block_q16(&vw->exc, &sub_exc,
+                                                     w_pitch_q16, w_mod.vco_pitch_q8,
+                                                     w_mod.vco_morph, w_mod.vco_pwm, &w_morph);
                     adrift_exciter_process(&vw->exc, &sub_exc, w_morph, wet_buf, frames);
                     if (hold_onset && sub_exc.pluck > 0) {
                         vw->exc.vco_phase     = w_vco_ph;
@@ -613,13 +622,11 @@ static void render_voice_list(adrift_synth_t *s,
             adrift_svf_process_lpf(&vc->in_lpf, exc_buf, inlpf_buf, frames);
         }
 
-        /* 2c. 1024-stage Pitch-Tracked BBD Resonator */
-        adrift_bbd_params_t bbd_p = vp->bbd;
-        bbd_p.dispersion = (int16_t)dsp_clamp_i32((int32_t)vp->bbd.dispersion + m.dispr, 0, 1023);
+        /* 2c. 1024-stage Pitch-Tracked BBD Resonator (glide already stepped at start of voice block) */
         int32_t target_fb_q14 = 0;
-        adrift_bbd_prepare_block(&vc->bbd, &bbd_p,
-                                 bbd_pitch_q8, m.bbd_pitch_q8,
-                                 m.fb_amt, m.fb_lpf + flt_tol, frames, &target_fb_q14);
+        adrift_bbd_prepare_block_ex(&vc->bbd, &bbd_p,
+                                    bbd_pitch_q8, m.bbd_pitch_q8,
+                                    m.fb_amt, m.fb_lpf + flt_tol, frames, &target_fb_q14, false);
         adrift_bbd_process(&vc->bbd, &bbd_p, target_fb_q14, inlpf_buf, wet_buf, frames);
 
         /* 2d. Dry/Wet Crossfade + Post-BBD Envelope 2 Output VCA + Group/Unison Gain + Stereo Pan */

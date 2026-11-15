@@ -2220,7 +2220,11 @@ static void draw_home_stage_page(uint16_t *fb,
             }
             if (vc->active) {
                 active_cnt++;
-                int32_t pq8 = vc->bbd.pitch_initialized ? (vc->bbd.slew_pitch_q16 >> 8) : ((int32_t)vc->note << 8);
+                int32_t pq8 = vc->bbd.pitch_initialized
+                                  ? ((vc->bbd.slew_pitch_q16 >= 0)
+                                         ? ((vc->bbd.slew_pitch_q16 + 128) >> 8)
+                                         : -(((-vc->bbd.slew_pitch_q16) + 128) >> 8))
+                                  : ((int32_t)vc->note << 8);
                 pitch_sum += pq8;
             }
         }
@@ -2281,7 +2285,9 @@ static void draw_home_stage_page(uint16_t *fb,
             int32_t pq8;
             if (vc->active && vc->bbd.pitch_initialized &&
                 (gp->assign_mode != ADRIFT_GROUP_SUPER || vc->group_slot <= 1u)) {
-                pq8 = vc->bbd.slew_pitch_q16 >> 8;
+                pq8 = (vc->bbd.slew_pitch_q16 >= 0)
+                          ? ((vc->bbd.slew_pitch_q16 + 128) >> 8)
+                          : -(((-vc->bbd.slew_pitch_q16) + 128) >> 8);
             } else {
                 int32_t semi_q8 = 0, det_q8 = 0, sgain = 32767;
                 adrift_synth_compute_stack_slot_voicing(gp, vc->group_slot, spread_lut[og], &semi_q8, &det_q8, &sgain);

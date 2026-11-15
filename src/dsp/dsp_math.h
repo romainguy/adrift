@@ -71,6 +71,27 @@ uint32_t dsp_pitch_to_phase_inc(int32_t pitch_q8);
 uint32_t dsp_pitch_to_period_q16(int32_t pitch_q8);
 uint32_t dsp_pitch_to_freq_q8(int32_t pitch_q8);
 
+/* Sub-Q8 (Q16 semitone = 0.0015 cent) interpolated phase increment & period helpers */
+DSP_ALWAYS_INLINE uint32_t dsp_pitch_q16_to_phase_inc(int32_t pitch_q16) {
+    int32_t  p_q8     = pitch_q16 >> 8;
+    uint32_t sub_frac = (uint32_t)(pitch_q16 & 0xFF);
+    uint32_t inc0     = dsp_pitch_to_phase_inc(p_q8);
+    if (sub_frac == 0u) return inc0;
+    uint32_t inc1     = dsp_pitch_to_phase_inc(p_q8 + 1);
+    if (inc1 <= inc0) return inc0;
+    return inc0 + ((((inc1 - inc0) * sub_frac) + 128u) >> 8);
+}
+
+DSP_ALWAYS_INLINE uint32_t dsp_pitch_q16_to_period_q16(int32_t pitch_q16) {
+    int32_t  p_q8     = pitch_q16 >> 8;
+    uint32_t sub_frac = (uint32_t)(pitch_q16 & 0xFF);
+    uint32_t per0     = dsp_pitch_to_period_q16(p_q8);
+    if (sub_frac == 0u) return per0;
+    uint32_t per1     = dsp_pitch_to_period_q16(p_q8 + 1);
+    if (per0 <= per1) return per0;
+    return per0 - ((((per0 - per1) * sub_frac) + 128u) >> 8);
+}
+
 /* Cutoff 0..1023 -> filter parameters (32.7 Hz .. 21 kHz exponential) */
 uint32_t dsp_cutoff_to_fc_q8(int32_t cutoff_1023);
 uint32_t dsp_cutoff_to_svf_g_q16(int32_t cutoff_1023);

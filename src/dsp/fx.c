@@ -468,18 +468,19 @@ static DSP_HOT_RAM int32_t fx_pass_reverb_fdn(adrift_fx_state_t *fx,
         int32_t tank_l = dsp_sat_q15(c_l1 - c_l2);
         int32_t tank_r = dsp_sat_q15(c_r1 - c_r2);
 
-        /* Modulated Output Allpass Diffusers (L: 317 +/- 8, R: 353 +/- 8, g = 0.5) */
-        uint32_t mod_l_ofs = (uint32_t)(317 + (sin2_l >> 12));
-        uint32_t mod_r_ofs = (uint32_t)(353 + (sin2_r >> 12));
-        int32_t  zo_l = fx->ap_out_l[(ap_out_w - mod_l_ofs) & ADRIFT_FX_AP2_MASK];
-        int32_t  vo_l = dsp_sat_q15(tank_l + (zo_l >> 1));
+        /* Modulated Output Allpass Diffusers (L: 317 +/- 8, R: 353 +/- 8, g = 0.5)
+         * Fractional Q8 interpolation prevents ~32 Hz integer delay-step zipper clicks. */
+        int32_t mod_l_q8 = (317 << 8) + (sin2_l >> 4);
+        int32_t mod_r_q8 = (353 << 8) + (sin2_r >> 4);
+        int32_t zo_l = fx_read_interp_q8(fx->ap_out_l, ADRIFT_FX_AP2_MASK, ap_out_w, mod_l_q8);
+        int32_t vo_l = dsp_sat_q15(tank_l + (zo_l >> 1));
         fx->ap_out_l[ap_out_w] = (int16_t)vo_l;
-        int32_t  out_l = dsp_sat_q15(zo_l - (vo_l >> 1));
+        int32_t out_l = dsp_sat_q15(zo_l - (vo_l >> 1));
 
-        int32_t  zo_r = fx->ap_out_r[(ap_out_w - mod_r_ofs) & ADRIFT_FX_AP2_MASK];
-        int32_t  vo_r = dsp_sat_q15(tank_r + (zo_r >> 1));
+        int32_t zo_r = fx_read_interp_q8(fx->ap_out_r, ADRIFT_FX_AP2_MASK, ap_out_w, mod_r_q8);
+        int32_t vo_r = dsp_sat_q15(tank_r + (zo_r >> 1));
         fx->ap_out_r[ap_out_w] = (int16_t)vo_r;
-        int32_t  out_r = dsp_sat_q15(zo_r - (vo_r >> 1));
+        int32_t out_r = dsp_sat_q15(zo_r - (vo_r >> 1));
         ap_out_w = (ap_out_w + 1u) & ADRIFT_FX_AP2_MASK;
 
         int32_t rvb_wet_l = dsp_mul_q14(out_l, rvb_wet_q15);

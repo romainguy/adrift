@@ -497,6 +497,48 @@ void test_master_fx(void) {
           "Expected Shimmer Diffusion Reverb stereo tail > -46 dBFS (got %.2f dBFS, diff=%d)",
           rvb_tail_rms, rvb_stereo_diff);
 
+    /* Modulated Output Allpass smoothness check: feeding a Hann-windowed 220 Hz tone burst
+     * must produce a smooth reverb tail free of integer delay-jump second-difference spikes. */
+    {
+        const uint32_t RN = 8192u;
+        adrift_fx_state_t *fx_sm = (adrift_fx_state_t *)calloc(1u, sizeof(adrift_fx_state_t));
+        int32_t *rl = (int32_t *)calloc(RN, sizeof(int32_t));
+        int32_t *rr = (int32_t *)calloc(RN, sizeof(int32_t));
+        adrift_fx_init(fx_sm);
+        adrift_fx_params_t rp;
+        memset(&rp, 0, sizeof(rp));
+        rp.reverb_size = 900;
+        rp.reverb_damp = 600;
+        rp.reverb_mix  = 1023;
+
+        for (uint32_t i = 0u; i < 4096u; i++) {
+            double win = 0.5 - 0.5 * cos(2.0 * M_PI * (double)i / 4096.0);
+            int32_t v  = (int32_t)llround(24000.0 * win *
+                                          sin(2.0 * M_PI * 220.0 * (double)i / (double)ADRIFT_SAMPLE_RATE));
+            rl[i] = v;
+            rr[i] = v;
+        }
+        adrift_fx_process(fx_sm, &rp, rl, rr, RN);
+
+        int32_t max_tail = 0;
+        int32_t max_d2   = 0;
+        for (uint32_t i = 4608u; i < RN; i++) {
+            int32_t a = rl[i] < 0 ? -rl[i] : rl[i];
+            if (a > max_tail) max_tail = a;
+            int32_t d2 = rl[i] - 2 * rl[i - 1u] + rl[i - 2u];
+            if (d2 < 0) d2 = -d2;
+            if (d2 > max_d2) max_d2 = d2;
+        }
+        double d2_ratio = (double)max_d2 / (double)(max_tail > 0 ? max_tail : 1);
+        CHECK(max_tail > 500 && d2_ratio < 0.015,
+              "Reverb modulated allpass produced discontinuity ticks (max_d2=%d, tail=%d, ratio=%.4f)",
+              max_d2, max_tail, d2_ratio);
+
+        free(rr);
+        free(rl);
+        free(fx_sm);
+    }
+
     /* Anti-Larsen stability check: even at 100% Size + 100% Shimmer + 0% Damping,
      * the reverb tail must decay monotonically without runaway feedback oscillation. */
     s->fx_params.reverb_size    = 1023;

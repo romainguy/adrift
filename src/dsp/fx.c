@@ -385,20 +385,20 @@ static DSP_HOT_RAM void fx_pass_reverb_in(adrift_fx_state_t *fx,
         ap_in2_w = (ap_in2_w + 1u) & ADRIFT_FX_AP2_MASK;
 
         /* Feed-forward Dual-Grain +12 ST Octave-Up Shimmer driven from diffused input
-         * (diff2). Because the pitch shifter is strictly feed-forward into the FDN tank
-         * rather than inside the tank's feedback loop, it cannot cause runaway octave
-         * escalation or Larsen howling at any combination of RVB SZ and SHIMMR. */
+         * (diff2): 2048-sample (~46.4 ms) causal 2x read heads (`shimmer_w - 2048 + p`)
+         * crossfaded with an equal-power half-sine/cosine window (`win_a^2 + win_b^2 = 1`). */
         fx->shimmer_buf[shimmer_w] = (int16_t)diff2;
         int32_t shim_sig = 0;
         if (rvb_shim_q15 > 0) {
-            uint32_t p_a   = shimmer_w & 511u;
-            uint32_t p_b   = (shimmer_w + 256u) & 511u;
-            uint32_t idx_a = (shimmer_w - 512u + (p_a << 1)) & ADRIFT_FX_SHIMMER_MASK;
-            uint32_t idx_b = (shimmer_w - 512u + (p_b << 1)) & ADRIFT_FX_SHIMMER_MASK;
-            int32_t  win_a = (p_a < 256u) ? (int32_t)(p_a << 7) : (int32_t)((511u - p_a) << 7);
-            int32_t  win_b = 32767 - win_a;
-            int32_t  grain = ((fx->shimmer_buf[idx_a] * win_a) +
-                              (fx->shimmer_buf[idx_b] * win_b)) >> 15;
+            uint32_t p_a    = shimmer_w & 2047u;
+            uint32_t p_b    = (shimmer_w + 1024u) & 2047u;
+            uint32_t idx_a  = (shimmer_w - 2048u + p_a) & ADRIFT_FX_SHIMMER_MASK;
+            uint32_t idx_b  = (shimmer_w - 2048u + p_b) & ADRIFT_FX_SHIMMER_MASK;
+            int32_t  win_a  = dsp_sine_lut_q15(p_a << 20);
+            int32_t  win_b  = dsp_sine_lut_q15(p_b << 20);
+            int32_t  sum_ab = ((fx->shimmer_buf[idx_a] * win_a) +
+                               (fx->shimmer_buf[idx_b] * win_b)) >> 15;
+            int32_t  grain  = (sum_ab * 23170) >> 15;
             /* Smooth grain splices (~3.8 kHz LPF) & passive DC/low-cut blocker (~160 Hz) */
             shimmer_lp += ((grain - shimmer_lp) * 11500) >> 15;
             int32_t shim_hp = dsp_mul_q15(shim_dc_y + shimmer_lp - shim_dc_x, 32000);

@@ -584,6 +584,46 @@ void test_master_fx(void) {
         free(fx_sm);
     }
 
+    /* Octave Shimmer +12 ST pitch & 2048-sample equal-power window check:
+     * Feeding a pure 440 Hz tone must excite a clean 880 Hz (+12 ST) octave peak in the tank
+     * dominating 1320 Hz (+19 ST) by > 20 dB without write-head collision buzz. */
+    {
+        const uint32_t SN = 16384u;
+        adrift_fx_state_t *fx_sh = (adrift_fx_state_t *)calloc(1u, sizeof(adrift_fx_state_t));
+        int32_t *sl = (int32_t *)calloc(SN, sizeof(int32_t));
+        int32_t *sr = (int32_t *)calloc(SN, sizeof(int32_t));
+        int16_t *spcm = (int16_t *)calloc(SN * 2u, sizeof(int16_t));
+        adrift_fx_init(fx_sh);
+        adrift_fx_params_t sp;
+        memset(&sp, 0, sizeof(sp));
+        sp.reverb_size    = 750;
+        sp.reverb_damp    = 200;
+        sp.reverb_shimmer = 1023;
+        sp.reverb_mix     = 1023;
+
+        for (uint32_t i = 0u; i < SN; i++) {
+            int32_t v = (int32_t)llround(20000.0 * sin(2.0 * M_PI * 440.0 * (double)i / FS_EXACT));
+            sl[i] = v;
+            sr[i] = v;
+        }
+        adrift_fx_process(fx_sh, &sp, sl, sr, SN);
+        for (uint32_t i = 0u; i < SN; i++) {
+            int32_t v = (int32_t)llround(20000.0 * sin(2.0 * M_PI * 440.0 * (double)i / FS_EXACT));
+            spcm[2u * i]      = dsp_sat16(sl[i] - v); /* Pure reverb+shimmer wet signal */
+            spcm[2u * i + 1u] = dsp_sat16(sr[i] - v);
+        }
+        double oct_880_db  = goertzel_mag_db(spcm, 8192u, 8192u, 880.0);
+        double fifth_1320_db = goertzel_mag_db(spcm, 8192u, 8192u, 1320.0);
+        CHECK(oct_880_db > -36.0 && (oct_880_db - fifth_1320_db) > 20.0,
+              "Shimmer failed +12 ST octave purity check (880 Hz=%.1f dB, 1320 Hz=%.1f dB)",
+              oct_880_db, fifth_1320_db);
+
+        free(spcm);
+        free(sr);
+        free(sl);
+        free(fx_sh);
+    }
+
     /* Anti-Larsen stability check: even at 100% Size + 100% Shimmer + 0% Damping,
      * the reverb tail must decay monotonically without runaway feedback oscillation. */
     s->fx_params.reverb_size    = 1023;

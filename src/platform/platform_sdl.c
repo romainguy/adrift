@@ -25,11 +25,13 @@
 /* Lock-free SPSC MIDI ring from CoreMIDI & SDL UI thread -> SDL audio callback */
 #define SIM_MIDI_Q_LEN 256u
 static adrift_midi_msg_t g_midi_q[SIM_MIDI_Q_LEN];
+static uint64_t          g_midi_stamp[SIM_MIDI_Q_LEN];
 static volatile uint32_t g_midi_w = 0u;
 static volatile uint32_t g_midi_r = 0u;
 static SDL_SpinLock      g_midi_lock = 0;
 
 static void sim_midi_push(uint8_t status, uint8_t d1, uint8_t d2) {
+    uint64_t now = SDL_GetPerformanceCounter();
     SDL_AtomicLock(&g_midi_lock);
     if (g_midi_w - g_midi_r < SIM_MIDI_Q_LEN) {
         uint32_t idx = g_midi_w % SIM_MIDI_Q_LEN;
@@ -37,6 +39,7 @@ static void sim_midi_push(uint8_t status, uint8_t d1, uint8_t d2) {
         g_midi_q[idx].data1         = d1;
         g_midi_q[idx].data2         = d2;
         g_midi_q[idx].sample_offset = 0u;
+        g_midi_stamp[idx]           = now;
         g_midi_w++;
     }
     SDL_AtomicUnlock(&g_midi_lock);
@@ -216,27 +219,49 @@ static void sdl_audio_cb(void *userdata, Uint8 *stream, int len) {
     (void)userdata;
     uint32_t total_frames = (uint32_t)len / (2u * sizeof(int16_t));
     int16_t *out = (int16_t *)stream;
-    uint64_t t0 = SDL_GetPerformanceCounter();
+    uint64_t t0        = SDL_GetPerformanceCounter();
+    uint64_t perf_freq = SDL_GetPerformanceFrequency();
+    uint64_t win_ticks = (perf_freq > 0u)
+                             ? (((uint64_t)total_frames * perf_freq) / (uint64_t)ADRIFT_SAMPLE_RATE)
+                             : 0u;
+    uint64_t win_start = (t0 > win_ticks) ? (t0 - win_ticks) : 0u;
+    uint32_t max_off   = (total_frames > 0xFFFFu) ? 0xFFFFu
+                                                  : ((total_frames > 0u) ? (total_frames - 1u) : 0u);
 
-    uint32_t done = 0u;
-    while (done < total_frames) {
-        uint32_t chunk = total_frames - done;
-        if (chunk > ADRIFT_BLOCK_SIZE) chunk = ADRIFT_BLOCK_SIZE;
-
-        adrift_midi_msg_t evs[32];
-        uint32_t nev = 0u;
-        if (done == 0u) {
-            SDL_AtomicLock(&g_midi_lock);
-            while (g_midi_r != g_midi_w && nev < 32u) {
-                evs[nev++] = g_midi_q[g_midi_r % SIM_MIDI_Q_LEN];
-                g_midi_r++;
+    adrift_midi_msg_t evs[128];
+    uint32_t nev = 0u;
+    SDL_AtomicLock(&g_midi_lock);
+    while (g_midi_r != g_midi_w && nev < 128u) {
+        uint32_t          idx  = g_midi_r % SIM_MIDI_Q_LEN;
+        adrift_midi_msg_t m    = g_midi_q[idx];
+        uint64_t          ev_t = g_midi_stamp[idx];
+        g_midi_r++;
+        uint32_t off = 0u;
+        if (win_ticks > 0u && total_frames > 1u && ev_t > win_start) {
+            if (ev_t >= t0) {
+                off = max_off;
+            } else {
+                uint64_t rel = ev_t - win_start;
+                uint64_t est = (rel * (uint64_t)total_frames) / win_ticks;
+                off = (est > (uint64_t)max_off) ? max_off : (uint32_t)est;
             }
-            SDL_AtomicUnlock(&g_midi_lock);
         }
-
-        adrift_app_audio_block(out + 2u * done, chunk, evs, nev);
-        done += chunk;
+        m.sample_offset = (uint16_t)off;
+        evs[nev++]      = m;
     }
+    SDL_AtomicUnlock(&g_midi_lock);
+
+    for (uint32_t i = 1u; i < nev; i++) {
+        adrift_midi_msg_t m = evs[i];
+        uint32_t j = i;
+        while (j > 0u && evs[j - 1u].sample_offset > m.sample_offset) {
+            evs[j] = evs[j - 1u];
+            j--;
+        }
+        evs[j] = m;
+    }
+
+    adrift_app_audio_block(out, total_frames, nev > 0u ? evs : NULL, nev);
     adrift_app_mix_line_out(out, total_frames);
 
     uint64_t dt = SDL_GetPerformanceCounter() - t0;

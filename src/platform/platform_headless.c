@@ -52,22 +52,38 @@ void adrift_headless_render(int16_t *stereo_out,
                             uint32_t total_frames,
                             const adrift_midi_msg_t *events,
                             uint32_t num_events) {
-    uint32_t done = 0u;
-    uint32_t ev_i = 0u;
+    if (total_frames == 0u) {
+        if (num_events > 0u) {
+            adrift_app_audio_block(stereo_out, 0u, events, num_events);
+        }
+        return;
+    }
 
+    uint32_t done = 0u;
     while (done < total_frames) {
         uint32_t blk = total_frames - done;
         if (blk > ADRIFT_BLOCK_SIZE) blk = ADRIFT_BLOCK_SIZE;
 
-        /* Deliver events scheduled on the first block when sample_offset is used, or at block 0 */
-        const adrift_midi_msg_t *blk_evs = NULL;
+        /* Deliver events whose sample_offset falls inside [done, done + blk) */
+        adrift_midi_msg_t blk_evs[64];
         uint32_t blk_nev = 0u;
-        if (done == 0u && num_events > 0u) {
-            blk_evs = events;
-            blk_nev = num_events;
+        bool is_last = (done + blk >= total_frames);
+
+        for (uint32_t i = 0u; i < num_events && blk_nev < 64u; i++) {
+            uint32_t off = events[i].sample_offset;
+            if (off >= done && (off < done + blk || is_last)) {
+                adrift_midi_msg_t m = events[i];
+                uint32_t rel = off - done;
+                if (rel >= blk) rel = blk - 1u;
+                m.sample_offset = (uint16_t)rel;
+                blk_evs[blk_nev++] = m;
+            }
         }
-        (void)ev_i;
-        adrift_app_audio_block(stereo_out + 2u * done, blk, blk_evs, blk_nev);
+
+        adrift_app_audio_block(stereo_out + 2u * done,
+                               blk,
+                               blk_nev > 0u ? blk_evs : NULL,
+                               blk_nev);
         done += blk;
     }
 }

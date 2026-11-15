@@ -142,14 +142,18 @@ static uint32_t g_leds_buttons   = 0u;
 static uint8_t  g_web_boot_frame = 0u;
 static uint8_t  g_audio_rendered = 0u;
 
-static void queue_midi(uint8_t status, uint8_t d1, uint8_t d2) {
+static void queue_midi_at(uint8_t status, uint8_t d1, uint8_t d2, uint16_t sample_offset) {
     if (g_midi_len < ADRIFT_WEB_MIDI_CAP) {
         adrift_midi_msg_t *m = &g_midi_q[g_midi_len++];
         m->status        = status;
         m->data1         = d1;
         m->data2         = d2;
-        m->sample_offset = 0u;
+        m->sample_offset = sample_offset;
     }
+}
+
+static void queue_midi(uint8_t status, uint8_t d1, uint8_t d2) {
+    queue_midi_at(status, d1, d2, 0u);
 }
 
 static uint32_t map_hw_buttons(uint32_t hw_b) {
@@ -264,11 +268,15 @@ WASM_EXPORT void adrift_web_init(void) {
     g_storage_dirty = 0u; /* Clear any boot-recovery write flag */
 }
 
-WASM_EXPORT void adrift_web_push_midi(uint8_t status, uint8_t d1, uint8_t d2) {
+WASM_EXPORT void adrift_web_push_midi_at(uint8_t status, uint8_t d1, uint8_t d2, uint16_t sample_offset) {
     if (status < 0xF8u) {
         adrift_ui_dismiss_boot(adrift_app_get_ui());
     }
-    queue_midi(status, d1, d2);
+    queue_midi_at(status, d1, d2, sample_offset);
+}
+
+WASM_EXPORT void adrift_web_push_midi(uint8_t status, uint8_t d1, uint8_t d2) {
+    adrift_web_push_midi_at(status, d1, d2, 0u);
 }
 
 WASM_EXPORT void adrift_web_panel_key(uint8_t key_idx, uint8_t down, uint8_t velocity) {
@@ -508,20 +516,30 @@ WASM_EXPORT void adrift_web_render_audio(uint32_t frames) {
     }
     g_audio_rendered = 1u;
 
-    uint32_t done = 0u;
-    while (done < frames) {
-        uint32_t blk = frames - done;
-        if (blk > ADRIFT_BLOCK_SIZE) {
-            blk = ADRIFT_BLOCK_SIZE;
+    if (frames > 0u) {
+        uint16_t max_off = (uint16_t)(frames - 1u);
+        for (uint32_t i = 0u; i < g_midi_len; i++) {
+            adrift_midi_msg_t m = g_midi_q[i];
+            if (m.sample_offset > max_off) {
+                m.sample_offset = max_off;
+            }
+            uint32_t j = i;
+            while (j > 0u && g_midi_q[j - 1u].sample_offset > m.sample_offset) {
+                g_midi_q[j] = g_midi_q[j - 1u];
+                j--;
+            }
+            g_midi_q[j] = m;
         }
-        const adrift_midi_msg_t *evs = (done == 0u && g_midi_len > 0u) ? g_midi_q : (const adrift_midi_msg_t *)0;
-        uint32_t                 nev = (done == 0u) ? g_midi_len : 0u;
-
-        adrift_app_audio_block(g_pcm_i16 + (done * 2u), blk, evs, nev);
-        done += blk;
+        adrift_app_audio_block(g_pcm_i16,
+                               frames,
+                               g_midi_len > 0u ? g_midi_q : (const adrift_midi_msg_t *)0,
+                               g_midi_len);
+        g_midi_len = 0u;
+        adrift_app_mix_line_out(g_pcm_i16, frames);
+    } else if (g_midi_len > 0u) {
+        adrift_app_audio_block(g_pcm_i16, 0u, g_midi_q, g_midi_len);
+        g_midi_len = 0u;
     }
-    g_midi_len = 0u;
-    adrift_app_mix_line_out(g_pcm_i16, frames);
 
     const float inv_32768 = 1.0f / 32768.0f;
     for (uint32_t i = 0u; i < frames; i++) {

@@ -13,6 +13,7 @@
 #define FELUCCA_UAC_48K          1
 #define FELUCCA_UAC_MIDI_LAST    1
 #define FELUCCA_UAC_DEEP         1
+#define FELUCCA_MIDI_STAMP       1
 #define FELUCCA_ID               "FM-1_462000300"
 #define FELUCCA_USB_PID          0x0003
 #define FELUCCA_USB_MANUFACTURER "Adrift Synth"
@@ -76,6 +77,7 @@ static int32_t g_uac_q23[HALF_WORDS] __attribute__((aligned(4)));
 /* ---- Panel note-key MIDI queue (main/timer -> audio ISR) ---- */
 #define KBD_Q_LEN 32u
 static adrift_midi_msg_t g_kbd_q[KBD_Q_LEN];
+static uint32_t          g_kbd_t24[KBD_Q_LEN];
 static volatile uint32_t g_kbd_w, g_kbd_r;
 
 static void kbd_midi_push(uint8_t status, uint8_t d1, uint8_t d2) {
@@ -85,6 +87,7 @@ static void kbd_midi_push(uint8_t status, uint8_t d1, uint8_t d2) {
     g_kbd_q[idx].data1         = d1;
     g_kbd_q[idx].data2         = d2;
     g_kbd_q[idx].sample_offset = 0u;
+    g_kbd_t24[idx]             = fm1_ticks();
     RING_PUBLISH();
     g_kbd_w++;
 }
@@ -104,7 +107,9 @@ static struct {
 
 static void um_put_pkt(uint32_t pkt) {
     if (mi_w - mi_r >= MQ) return;
-    midi_in_q[mi_w % MQ] = pkt | 0x10u; /* cable 1 = TRS MIDI jack */
+    uint32_t at     = mi_w % MQ;
+    midi_in_q[at]   = pkt | 0x10u; /* cable 1 = TRS MIDI jack */
+    midi_in_t24[at] = fm1_ticks();
     RING_PUBLISH();
     mi_w++;
 }
@@ -295,6 +300,19 @@ bool adrift_platform_storage_erase(uint8_t slot) {
     return (rc == 0);
 }
 
+/* Map a 24 MHz TIMER4 event timestamp onto [0, HALF_FRAMES - 1] (544 ticks = 1 exact I2S sample) */
+static inline uint16_t stamp_to_half_offset(uint32_t ev_t24, uint32_t win_start) {
+    const uint32_t half_ticks = HALF_FRAMES * UA_TPF;
+    int32_t dt = (int32_t)(ev_t24 - win_start);
+    if (dt <= 0) {
+        return 0u;
+    }
+    if ((uint32_t)dt >= half_ticks) {
+        return (uint16_t)(HALF_FRAMES - 1u);
+    }
+    return (uint16_t)((uint32_t)dt / UA_TPF);
+}
+
 /* ---- Audio DMA ISR (ALNK0 priority 3) ---- */
 static void render_half(int32_t *dma_out) {
     uint32_t t0 = fm1_ticks();
@@ -307,13 +325,16 @@ static void render_half(int32_t *dma_out) {
         return;
     }
     const uint32_t budget_us = (HALF_FRAMES * 1000000u) / ADRIFT_SAMPLE_RATE;
+    const uint32_t win_start = t0 - (HALF_FRAMES * UA_TPF);
 
     adrift_midi_msg_t events[48];
     uint32_t nev = 0u;
 
-    /* Drain USB + TRS UART1 MIDI queue */
+    /* Drain USB + TRS UART1 MIDI queue with 24 MHz crystal arrival timestamps */
     while (mi_r != mi_w && nev < 36u) {
-        uint32_t pkt = midi_in_q[mi_r % MQ];
+        uint32_t idx  = mi_r % MQ;
+        uint32_t pkt  = midi_in_q[idx];
+        uint32_t ev_t = midi_in_t24[idx];
         mi_r++;
         uint8_t cin = (uint8_t)(pkt & 0x0Fu);
         uint8_t st  = (uint8_t)((pkt >> 8) & 0xFFu);
@@ -322,15 +343,33 @@ static void render_half(int32_t *dma_out) {
             events[nev].status        = st;
             events[nev].data1         = (uint8_t)((pkt >> 16) & 0xFFu);
             events[nev].data2         = (uint8_t)((pkt >> 24) & 0xFFu);
-            events[nev].sample_offset = 0u;
+            events[nev].sample_offset = stamp_to_half_offset(ev_t, win_start);
             nev++;
         }
+    }
+    if (mi_r == mi_w && midi_in_overflow) {
+        midi_in_overflow = 0u;
     }
 
     /* Drain built-in 27-key keyboard MIDI events */
     while (g_kbd_r != g_kbd_w && nev < 48u) {
-        events[nev++] = g_kbd_q[g_kbd_r % KBD_Q_LEN];
+        uint32_t          idx  = g_kbd_r % KBD_Q_LEN;
+        adrift_midi_msg_t m    = g_kbd_q[idx];
+        uint32_t          ev_t = g_kbd_t24[idx];
         g_kbd_r++;
+        m.sample_offset = stamp_to_half_offset(ev_t, win_start);
+        events[nev++]   = m;
+    }
+
+    /* Stably insertion-sort merged USB/TRS + panel key events by sample_offset */
+    for (uint32_t i = 1u; i < nev; i++) {
+        adrift_midi_msg_t m = events[i];
+        uint32_t j = i;
+        while (j > 0u && events[j - 1u].sample_offset > m.sample_offset) {
+            events[j] = events[j - 1u];
+            j--;
+        }
+        events[j] = m;
     }
 
     adrift_app_audio_block_q23(dma_out, HALF_FRAMES, events, nev);
@@ -378,6 +417,7 @@ void fm1_timer5_irq(void) {
     fm1_input_tick();
 
     uint32_t now = fm1_ticks();
+    usb_midi_peek(now - (50u * FM1_TICKS_PER_US));
     tick_acc += now - last_ticks;
     last_ticks = now;
     while (tick_acc >= 1000u * FM1_TICKS_PER_US) {

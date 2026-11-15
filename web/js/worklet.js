@@ -91,7 +91,16 @@ class AdriftProcessor extends AudioWorkletProcessor {
     if (!msg || !this.exports) return;
     switch (msg.type) {
       case 'midi':
-        this.exports.adrift_web_push_midi(msg.status & 0xff, msg.d1 & 0x7f, msg.d2 & 0x7f);
+        if (this.exports.adrift_web_push_midi_at) {
+          this.exports.adrift_web_push_midi_at(
+            msg.status & 0xff,
+            msg.d1 & 0x7f,
+            msg.d2 & 0x7f,
+            (msg.offset | 0) & 0xffff
+          );
+        } else {
+          this.exports.adrift_web_push_midi(msg.status & 0xff, msg.d1 & 0x7f, msg.d2 & 0x7f);
+        }
         break;
       case 'panelKey':
         this.exports.adrift_web_panel_key(msg.key & 0xff, msg.down ? 1 : 0, msg.velocity & 0x7f);
@@ -245,8 +254,10 @@ class AdriftProcessor extends AudioWorkletProcessor {
 
     const maxNeededIdx = Math.floor(this.srcPos + (n - 1) * this.step) + 3;
     while (this.srcWritten <= maxNeededIdx) {
-      this._produceSourceFrames(64);
-      this.uiSampleAccum += 64;
+      const need = maxNeededIdx - this.srcWritten + 1;
+      const batch = Math.min(512, Math.ceil(need / 64) * 64);
+      this._produceSourceFrames(batch);
+      this.uiSampleAccum += batch;
     }
 
     const targetGain = this.muted ? 0.0 : 1.0;

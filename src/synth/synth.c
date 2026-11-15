@@ -1005,6 +1005,34 @@ static void synth_render_block_impl(adrift_synth_t *s,
                                     uint32_t frames,
                                     const adrift_midi_msg_t *midi_events,
                                     uint32_t num_midi) {
+    adrift_midi_msg_t sorted_buf[64];
+    if (num_midi > 0u && frames > 0u) {
+        uint16_t max_off = (frames > 0xFFFFu) ? 0xFFFFu : (uint16_t)(frames - 1u);
+        bool need_fix = false;
+        for (uint32_t i = 0u; i < num_midi; i++) {
+            if (midi_events[i].sample_offset > max_off ||
+                (i > 0u && midi_events[i].sample_offset < midi_events[i - 1u].sample_offset)) {
+                need_fix = true;
+                break;
+            }
+        }
+        if (need_fix && num_midi <= 64u) {
+            for (uint32_t i = 0u; i < num_midi; i++) {
+                adrift_midi_msg_t m = midi_events[i];
+                if (m.sample_offset > max_off) {
+                    m.sample_offset = max_off;
+                }
+                uint32_t j = i;
+                while (j > 0u && sorted_buf[j - 1u].sample_offset > m.sample_offset) {
+                    sorted_buf[j] = sorted_buf[j - 1u];
+                    j--;
+                }
+                sorted_buf[j] = m;
+            }
+            midi_events = sorted_buf;
+        }
+    }
+
     uint32_t cursor = 0u;
     uint32_t ev_idx = 0u;
     int32_t  q23_sub[2u * ADRIFT_BLOCK_SIZE];

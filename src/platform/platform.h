@@ -58,10 +58,10 @@ enum {
 };
 
 typedef struct {
-    uint8_t status;
-    uint8_t data1;
-    uint8_t data2;
-    uint8_t sample_offset; /* 0 .. ADRIFT_BLOCK_SIZE - 1 */
+    uint8_t  status;
+    uint8_t  data1;
+    uint8_t  data2;
+    uint16_t sample_offset; /* 0 .. frames - 1 within current render callback */
 } adrift_midi_msg_t;
 
 typedef struct {

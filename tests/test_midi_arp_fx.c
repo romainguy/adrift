@@ -1177,7 +1177,120 @@ void test_midi_clock_sync(void) {
     CHECK(!s->midi_clk_active && !s->midi_clk_running,
           "External MIDI clock watchdog did not fall back to internal clock after >2s silence");
 
+    /* 11b. Sample-accurate 16-bit sample_offset (>= 256), unsorted multi-source sorting,
+     * and zero-jitter 24-PPQN clock lock across 512-frame host callbacks */
+    adrift_app_init();
+    s  = adrift_app_get_synth();
+    g1 = &s->groups[0];
+    s->fx_params.chorus_mix     = 0;
+    s->fx_params.delay_mix      = 0;
+    s->fx_params.reverb_mix     = 0;
+    s->fx_params.reverb_shimmer = 0;
+    s->fx_params.comp_mix       = 0;
+    g1->patch.exc.wave_morph    = 682; /* Saw */
+    g1->patch.exc.vco_level     = 1023;
+    g1->patch.exc.noise_level   = 0;
+    g1->patch.dry_wet           = 0;   /* Pure direct VCO for instantaneous sample onset */
+    g1->patch.in_lpf_cutoff     = 1023;
+    g1->patch.env1.attack       = 0;
+    g1->patch.env1.decay        = 512;
+    g1->patch.env1.sustain      = 1023;
+    g1->patch.env1.release      = 0;
+    g1->patch.env2.attack       = 0;
+    g1->patch.env2.decay        = 512;
+    g1->patch.env2.sustain      = 1023;
+    g1->patch.env2.release      = 0;
+
+    /* Settle 1 silent block, then schedule Note-On at sample_offset = 333 (>= 256) in a 512-frame callback */
+    adrift_app_audio_block(pcm, 64u, NULL, 0u);
+    adrift_midi_msg_t wide_on = { 0x90u, 69u, 120u, 333u };
+    adrift_app_audio_block(pcm, 512u, &wide_on, 1u);
+    uint32_t first_nz = 512u;
+    for (uint32_t i = 0u; i < 512u; i++) {
+        if (pcm[2u * i] != 0 || pcm[2u * i + 1u] != 0) {
+            first_nz = i;
+            break;
+        }
+    }
+    CHECK(first_nz >= 333u && first_nz <= 336u,
+          "Expected wide sample_offset=333 Note-On onset in [333..336], got sample %u",
+          (unsigned)first_nz);
+
+    /* Verify headless 64-frame DMA slicer also honors sample_offset >= 256 */
+    adrift_synth_all_notes_off(s, true);
+    adrift_headless_render(pcm, 256u, NULL, 0u);
+    adrift_midi_msg_t hl_on = { 0x90u, 60u, 120u, 299u };
+    adrift_headless_render(pcm, 512u, &hl_on, 1u);
+    first_nz = 512u;
+    for (uint32_t i = 0u; i < 512u; i++) {
+        if (pcm[2u * i] != 0 || pcm[2u * i + 1u] != 0) {
+            first_nz = i;
+            break;
+        }
+    }
+    CHECK(first_nz >= 299u && first_nz <= 302u,
+          "Expected headless sample_offset=299 Note-On onset in [299..302], got sample %u",
+          (unsigned)first_nz);
+
+    /* Verify unsorted multi-source events (e.g. merged USB + panel queue) are stably sorted by sample_offset */
+    adrift_synth_all_notes_off(s, true);
+    adrift_app_audio_block(pcm, 256u, NULL, 0u);
+    adrift_midi_msg_t unsorted_evs[2] = {
+        { 0x80u, 64u,   0u, 400u }, /* Note-Off at sample 400 (listed first!) */
+        { 0x90u, 64u, 120u, 100u }  /* Note-On  at sample 100 (listed second!) */
+    };
+    adrift_app_audio_block(pcm, 512u, unsorted_evs, 2u);
+    int32_t pk_pre = 0, pk_mid = 0;
+    for (uint32_t i = 0u; i < 100u; i++) {
+        int32_t a = pcm[2u * i] < 0 ? -pcm[2u * i] : pcm[2u * i];
+        if (a > pk_pre) pk_pre = a;
+    }
+    for (uint32_t i = 100u; i < 400u; i++) {
+        int32_t a = pcm[2u * i] < 0 ? -pcm[2u * i] : pcm[2u * i];
+        if (a > pk_mid) pk_mid = a;
+    }
+    bool any_kd = false;
+    for (int v = 0; v < ADRIFT_MAX_VOICES; v++) {
+        if (s->voices[v].owner_group == 0 && s->voices[v].key_down) {
+            any_kd = true;
+        }
+    }
+    CHECK(pk_pre == 0 && pk_mid > 1000 && !any_kd,
+          "Unsorted MIDI events were not ordered by sample_offset (pk_pre=%d, pk_mid=%d, key_down=%d)",
+          pk_pre, pk_mid, (int)any_kd);
+
+    /* Verify 24-PPQN clock ticks landing at sub-block offsets (including >= 256) inside 512-frame callbacks
+     * lock with 0-sample quantization jitter (exact 735 << 4 = 11760 period_q4) */
+    const uint32_t CB_FRAMES = 512u;
+    uint32_t next_tick = 0u;
+    for (uint32_t cb = 0u; cb < 20u; cb++) {
+        uint32_t cb_start = cb * CB_FRAMES;
+        uint32_t cb_end   = cb_start + CB_FRAMES;
+        adrift_midi_msg_t cb_evs[4];
+        uint32_t cb_nev = 0u;
+        if (cb == 0u) {
+            cb_evs[cb_nev].status        = 0xFAu;
+            cb_evs[cb_nev].data1         = 0u;
+            cb_evs[cb_nev].data2         = 0u;
+            cb_evs[cb_nev].sample_offset = 0u;
+            cb_nev++;
+        }
+        while (next_tick < cb_end && cb_nev < 4u) {
+            cb_evs[cb_nev].status        = 0xF8u;
+            cb_evs[cb_nev].data1         = 0u;
+            cb_evs[cb_nev].data2         = 0u;
+            cb_evs[cb_nev].sample_offset = (uint16_t)(next_tick - cb_start);
+            cb_nev++;
+            next_tick += PULSE_SAMPLES;
+        }
+        adrift_app_audio_block(pcm, CB_FRAMES, cb_nev > 0u ? cb_evs : NULL, cb_nev);
+    }
+    CHECK(s->midi_clk_active && s->midi_clk_bpm == 150u && s->midi_clk_period_q4 == (PULSE_SAMPLES << 4),
+          "512-frame sub-block MIDI clock did not lock jitter-free: active=%d bpm=%u period_q4=%u (expected %u)",
+          (int)s->midi_clk_active, (unsigned)s->midi_clk_bpm,
+          (unsigned)s->midi_clk_period_q4, (unsigned)(PULSE_SAMPLES << 4));
+
     free(fb);
     free(pcm);
-    printf("  -> PASS (24 PPQN lock=150 BPM, phase-locked Arp & 2X Ratchet, Delay 1/16 sync, Stop/Watchdog OK)\n");
+    printf("  -> PASS (24 PPQN lock=150 BPM, 16-bit sample_offset, phase-locked Arp & Delay, Stop/Watchdog OK)\n");
 }

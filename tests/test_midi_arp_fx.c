@@ -444,6 +444,51 @@ void test_master_fx(void) {
         free(al_1x);
         free(fx_4x);
         free(fx_1x);
+
+        /* Chorus Doppler pitch-excursion bound: at max depth (1023), wet tap pitch shift on a 1 kHz
+         * tone must stay in the lush Dimension ensemble range (6..28 cents), avoiding seasick +-90c warble. */
+        const uint32_t PN = 65536u;
+        adrift_fx_state_t *fx_p = (adrift_fx_state_t *)calloc(1u, sizeof(adrift_fx_state_t));
+        int32_t *pl = (int32_t *)calloc(PN, sizeof(int32_t));
+        int32_t *pr = (int32_t *)calloc(PN, sizeof(int32_t));
+        adrift_fx_init(fx_p);
+        cp.chorus_mix = 1023;
+        for (uint32_t i = 0u; i < PN; i++) {
+            int32_t v = (int32_t)llround(20000.0 * sin(2.0 * M_PI * 1000.0 * (double)i / FS_EXACT));
+            pl[i] = v;
+            pr[i] = 0; /* Drive L only so wet_l = chorus_lp_l is pure single-channel modulated tap */
+        }
+        adrift_fx_process(fx_p, &cp, pl, pr, PN);
+        double max_cents_dev = 0.0;
+        for (uint32_t win0 = 2048u; win0 + 2048u <= PN; win0 += 1024u) {
+            /* Measure wet tap instantaneous frequency via interpolated positive zero crossings */
+            double first_zc = -1.0, last_zc = -1.0;
+            int zc_cnt = 0;
+            double prev_w = (double)pl[win0] - 20000.0 * sin(2.0 * M_PI * 1000.0 * (double)win0 / FS_EXACT);
+            for (uint32_t k = 1u; k < 2048u; k++) {
+                uint32_t idx = win0 + k;
+                double cur_w = (double)pl[idx] - 20000.0 * sin(2.0 * M_PI * 1000.0 * (double)idx / FS_EXACT);
+                if (prev_w <= 0.0 && cur_w > 0.0) {
+                    double frac = -prev_w / (cur_w - prev_w + 1e-12);
+                    double pos  = (double)(idx - 1u) + frac;
+                    if (first_zc < 0.0) first_zc = pos;
+                    last_zc = pos;
+                    zc_cnt++;
+                }
+                prev_w = cur_w;
+            }
+            if (zc_cnt > 10) {
+                double f_inst = FS_EXACT * (double)(zc_cnt - 1) / (last_zc - first_zc);
+                double cents  = fabs(1200.0 * log2(f_inst / 1000.0));
+                if (cents > max_cents_dev) max_cents_dev = cents;
+            }
+        }
+        CHECK(max_cents_dev > 6.0 && max_cents_dev < 28.0,
+              "Chorus max pitch excursion out of lush ensemble range (got %.2f cents, expected 6..28 cents)",
+              max_cents_dev);
+        free(pr);
+        free(pl);
+        free(fx_p);
     }
 
     /* 10b. Stage 2: Stereo Ping-Pong Tape Delay sustains echoes after dry voice stops */

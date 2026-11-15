@@ -60,6 +60,7 @@ typedef struct {
     int16_t  delay_r[ADRIFT_FX_DELAY_LEN];
     uint32_t delay_w;
     int32_t  delay_len_q8;
+    int32_t  delay_len_q14;
     int32_t  delay_lp_l;
     int32_t  delay_lp_r;
     int32_t  delay_dc_x_l;

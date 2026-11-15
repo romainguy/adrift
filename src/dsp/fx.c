@@ -6,18 +6,44 @@ DSP_ALWAYS_INLINE int32_t fx_abs_i32(int32_t x) {
     return x < 0 ? -x : x;
 }
 
-DSP_ALWAYS_INLINE int32_t fx_read_interp_q8(const int16_t *buf,
-                                            uint32_t mask,
-                                            uint32_t w_idx,
-                                            int32_t delay_q8) {
-    if (delay_q8 < 256) delay_q8 = 256;
-    uint32_t int_part = (uint32_t)(delay_q8 >> 8);
-    int32_t  frac_q8  = delay_q8 & 0xFF;
+DSP_ALWAYS_INLINE int32_t fx_read_interp_q14(const int16_t *buf,
+                                              uint32_t mask,
+                                              uint32_t w_idx,
+                                              int32_t delay_q14) {
+    if (delay_q14 < 16384) delay_q14 = 16384;
+    uint32_t int_part = (uint32_t)(delay_q14 >> 14);
+    int32_t  frac_q14 = delay_q14 & 0x3FFF;
     uint32_t idx0     = (w_idx - int_part) & mask;
     uint32_t idx1     = (idx0 - 1u) & mask;
     int32_t  s0       = buf[idx0];
     int32_t  s1       = buf[idx1];
-    return s0 + (((s1 - s0) * frac_q8) >> 8);
+    return s0 + (((s1 - s0) * frac_q14) >> 14);
+}
+
+/* 4-point Catmull-Rom cubic fractional delay read in Q14 (prevents HF AM flutter in Chorus) */
+DSP_ALWAYS_INLINE int32_t fx_read_cubic_q14(const int16_t *buf,
+                                             uint32_t mask,
+                                             uint32_t w_idx,
+                                             int32_t delay_q14) {
+    if (delay_q14 < 32768) delay_q14 = 32768;
+    uint32_t int_part = (uint32_t)(delay_q14 >> 14);
+    int32_t  f        = delay_q14 & 0x3FFF;
+    uint32_t idx_m1   = (w_idx - int_part + 1u) & mask;
+    uint32_t idx0     = (w_idx - int_part) & mask;
+    uint32_t idx1     = (idx0 - 1u) & mask;
+    uint32_t idx2     = (idx0 - 2u) & mask;
+    int32_t  sm1      = buf[idx_m1];
+    int32_t  s0       = buf[idx0];
+    int32_t  s1       = buf[idx1];
+    int32_t  s2       = buf[idx2];
+
+    int32_t c1 = s1 - sm1;                            /* 2 * a1 in [-65535, 65535] */
+    int32_t c2 = (sm1 * 2) - (s0 * 5) + (s1 * 4) - s2;/* 2 * a2 in [-393216, 393216] */
+    int32_t c3 = ((s0 - s1) * 3) + s2 - sm1;          /* 2 * a3 in [-262144, 262144] */
+
+    int32_t t = c2 + (((c3 >> 2) * f) >> 12);
+    t         = c1 + (((t >> 2) * f) >> 12);
+    return s0 + (((t >> 2) * f) >> 13);
 }
 
 void adrift_fx_init(adrift_fx_state_t *fx) {
@@ -30,9 +56,10 @@ void adrift_fx_reset(adrift_fx_state_t *fx) {
     for (uint32_t i = 0; i < (uint32_t)sizeof(*fx); ++i) {
         raw[i] = 0u;
     }
-    fx->delay_len_q8  = (4412 << 8); /* Default ~100 ms in Q8 samples */
-    fx->lfo_phase_2   = 0x40000000u; /* 90-degree quadrature offset */
-    fx->comp_gain_q14 = 16384;       /* Unity VCA gain (1.0x in Q14) */
+    fx->delay_len_q8  = (4412 << 8);  /* Default ~100 ms in Q8 samples */
+    fx->delay_len_q14 = (4412 << 14); /* Default ~100 ms in Q14 samples */
+    fx->lfo_phase_2   = 0x40000000u;  /* 90-degree quadrature offset */
+    fx->comp_gain_q14 = 16384;        /* Unity VCA gain (1.0x in Q14) */
     fx->clk_period_q4 = saved_clk;
 }
 
@@ -93,9 +120,9 @@ typedef struct {
 } fx_stereo_i32_t;
 
 typedef struct {
-    int32_t chorus_depth_q8;
+    int32_t chorus_depth_q9;
     int32_t chorus_wet_q15;
-    int32_t target_delay_q8;
+    int32_t target_delay_q14;
     int32_t delay_fb_q15;
     int32_t delay_wet_q15;
     int32_t rvb_fb_q15;
@@ -179,7 +206,7 @@ static DSP_HOT_RAM void fx_pass_chorus(adrift_fx_state_t *fx,
     uint32_t chorus_w        = fx->chorus_w;
     int32_t  chorus_lp_l     = fx->chorus_lp_l;
     int32_t  chorus_lp_r     = fx->chorus_lp_r;
-    int32_t  chorus_depth_q8 = c->chorus_depth_q8;
+    int32_t  chorus_depth_q9 = c->chorus_depth_q9;
     int32_t  chorus_wet_q15  = c->chorus_wet_q15;
 
     for (uint32_t i = 0; i < chunk; ++i) {
@@ -189,18 +216,18 @@ static DSP_HOT_RAM void fx_pass_chorus(adrift_fx_state_t *fx,
         fx->chorus_l[chorus_w] = fx_chorus_in_sat16(sig_l);
         fx->chorus_r[chorus_w] = fx_chorus_in_sat16(sig_r);
 
-        /* Dual-LFO modulation around 360 samples (~8.2 ms) in Q8 */
-        int32_t sin1_l = lfo[i].s1_l;
-        int32_t sin1_r = lfo[i].s1_r;
-        int32_t sin2_l = lfo[i].s2_l;
-        int32_t sin2_r = lfo[i].s2_r;
-        int32_t mod_l  = ((sin1_l * 3) + sin2_l) >> 2;
-        int32_t mod_r  = ((sin1_r * 3) + sin2_r) >> 2;
-        int32_t d_l_q8 = (360 << 8) + dsp_mul_q15(mod_l, chorus_depth_q8);
-        int32_t d_r_q8 = (380 << 8) + dsp_mul_q15(mod_r, chorus_depth_q8);
+        /* Dual-LFO modulation around 360 / 380 samples (~8.2 ms) in Q14 */
+        int32_t sin1_l  = lfo[i].s1_l;
+        int32_t sin1_r  = lfo[i].s1_r;
+        int32_t sin2_l  = lfo[i].s2_l;
+        int32_t sin2_r  = lfo[i].s2_r;
+        int32_t mod_l   = ((sin1_l * 3) + sin2_l) >> 2;
+        int32_t mod_r   = ((sin1_r * 3) + sin2_r) >> 2;
+        int32_t d_l_q14 = (360 << 14) + ((mod_l * chorus_depth_q9) >> 10);
+        int32_t d_r_q14 = (380 << 14) + ((mod_r * chorus_depth_q9) >> 10);
 
-        int32_t raw_l = fx_read_interp_q8(fx->chorus_l, ADRIFT_FX_CHORUS_MASK, chorus_w, d_l_q8);
-        int32_t raw_r = fx_read_interp_q8(fx->chorus_r, ADRIFT_FX_CHORUS_MASK, chorus_w, d_r_q8);
+        int32_t raw_l = fx_read_cubic_q14(fx->chorus_l, ADRIFT_FX_CHORUS_MASK, chorus_w, d_l_q14);
+        int32_t raw_r = fx_read_cubic_q14(fx->chorus_r, ADRIFT_FX_CHORUS_MASK, chorus_w, d_r_q14);
 
         /* Warm BBD anti-imaging lowpass (~9 kHz) */
         chorus_lp_l += ((raw_l - chorus_lp_l) * 22000) >> 15;
@@ -229,36 +256,36 @@ static DSP_HOT_RAM int32_t fx_pass_delay(adrift_fx_state_t *fx,
                                          fx_stereo_i32_t *dly_out,
                                          uint32_t chunk,
                                          bool save_dly_buf) {
-    uint32_t delay_w         = fx->delay_w;
-    int32_t  delay_len_q8    = fx->delay_len_q8;
-    int32_t  delay_lp_l      = fx->delay_lp_l;
-    int32_t  delay_lp_r      = fx->delay_lp_r;
-    int32_t  dc_x_l          = fx->delay_dc_x_l;
-    int32_t  dc_y_l          = fx->delay_dc_y_l;
-    int32_t  dc_x_r          = fx->delay_dc_x_r;
-    int32_t  dc_y_r          = fx->delay_dc_y_r;
-    int32_t  target_delay_q8 = c->target_delay_q8;
-    int32_t  delay_fb_q15    = c->delay_fb_q15;
-    int32_t  delay_wet_q15   = c->delay_wet_q15;
-    int32_t  peak_delay      = 0;
+    uint32_t delay_w          = fx->delay_w;
+    int32_t  delay_len_q14    = fx->delay_len_q14;
+    int32_t  delay_lp_l       = fx->delay_lp_l;
+    int32_t  delay_lp_r       = fx->delay_lp_r;
+    int32_t  dc_x_l           = fx->delay_dc_x_l;
+    int32_t  dc_y_l           = fx->delay_dc_y_l;
+    int32_t  dc_x_r           = fx->delay_dc_x_r;
+    int32_t  dc_y_r           = fx->delay_dc_y_r;
+    int32_t  target_delay_q14 = c->target_delay_q14;
+    int32_t  delay_fb_q15     = c->delay_fb_q15;
+    int32_t  delay_wet_q15    = c->delay_wet_q15;
+    int32_t  peak_delay       = 0;
 
     for (uint32_t i = 0; i < chunk; ++i) {
         int32_t sig_l  = accum_l[i];
         int32_t sig_r  = accum_r[i];
         int32_t sin1_l = lfo[i].s1_l;
 
-        /* Smooth tape delay time slewing + subtle tape wow/flutter */
-        delay_len_q8 += (target_delay_q8 - delay_len_q8) >> 8;
-        int32_t wow_q8       = (sin1_l * 3) >> 8;
-        int32_t tap_len_l_q8 = delay_len_q8 + wow_q8;
-        /* Slight stereo offset on R tap (3/4 ratio at small settings or +11 ms spread) */
-        int32_t tap_len_r_q8 = delay_len_q8 - wow_q8 + (256 << 8);
-        if (tap_len_r_q8 > ((int32_t)(ADRIFT_FX_DELAY_LEN - 8u) << 8)) {
-            tap_len_r_q8 = ((int32_t)(ADRIFT_FX_DELAY_LEN - 8u) << 8);
+        /* Smooth Q14 tape delay time slewing + subtle tape wow/flutter */
+        delay_len_q14 += (target_delay_q14 - delay_len_q14) >> 8;
+        int32_t wow_q14       = (sin1_l * 3) >> 2; /* +-1.5 samples in Q14 */
+        int32_t tap_len_l_q14 = delay_len_q14 + wow_q14;
+        /* Slight stereo offset on R tap (+256 samples = ~5.8 ms spread) */
+        int32_t tap_len_r_q14 = delay_len_q14 - wow_q14 + (256 << 14);
+        if (tap_len_r_q14 > ((int32_t)(ADRIFT_FX_DELAY_LEN - 8u) << 14)) {
+            tap_len_r_q14 = ((int32_t)(ADRIFT_FX_DELAY_LEN - 8u) << 14);
         }
 
-        int32_t tap_l = fx_read_interp_q8(fx->delay_l, ADRIFT_FX_DELAY_MASK, delay_w, tap_len_l_q8);
-        int32_t tap_r = fx_read_interp_q8(fx->delay_r, ADRIFT_FX_DELAY_MASK, delay_w, tap_len_r_q8);
+        int32_t tap_l = fx_read_interp_q14(fx->delay_l, ADRIFT_FX_DELAY_MASK, delay_w, tap_len_l_q14);
+        int32_t tap_r = fx_read_interp_q14(fx->delay_r, ADRIFT_FX_DELAY_MASK, delay_w, tap_len_r_q14);
 
         /* Warm analog tape high-cut (~3.6 kHz) */
         delay_lp_l += ((tap_l - delay_lp_l) * 13500) >> 15;
@@ -299,9 +326,10 @@ static DSP_HOT_RAM int32_t fx_pass_delay(adrift_fx_state_t *fx,
         if (abs_dly > peak_delay) peak_delay = abs_dly;
     }
 
-    fx->delay_w      = delay_w;
-    fx->delay_len_q8 = delay_len_q8;
-    fx->delay_lp_l   = delay_lp_l;
+    fx->delay_w       = delay_w;
+    fx->delay_len_q14 = delay_len_q14;
+    fx->delay_len_q8  = delay_len_q14 >> 6;
+    fx->delay_lp_l    = delay_lp_l;
     fx->delay_lp_r   = delay_lp_r;
     fx->delay_dc_x_l = dc_x_l;
     fx->delay_dc_y_l = dc_y_l;
@@ -422,15 +450,15 @@ static DSP_HOT_RAM int32_t fx_pass_reverb_fdn(adrift_fx_state_t *fx,
         int32_t sin2_r = lfo[i].s2_r;
 
         /* 4 Mutually-Prime Quadrature-Modulated Comb Filters (FDN)
-         * Slow +/- 3.5 sample LFO modulation smears standing-wave eigenmodes */
-        int32_t c_l1 = fx_read_interp_q8(fx->comb_l1, ADRIFT_FX_COMB_MASK, comb_w,
-                                         (1499 << 8) + (sin1_l >> 5));
-        int32_t c_r1 = fx_read_interp_q8(fx->comb_r1, ADRIFT_FX_COMB_MASK, comb_w,
-                                         (1613 << 8) + (sin1_r >> 5));
-        int32_t c_l2 = fx_read_interp_q8(fx->comb_l2, ADRIFT_FX_COMB_MASK, comb_w,
-                                         (1777 << 8) + (sin2_l >> 5));
-        int32_t c_r2 = fx_read_interp_q8(fx->comb_r2, ADRIFT_FX_COMB_MASK, comb_w,
-                                         (1931 << 8) + (sin2_r >> 5));
+         * Slow +/- 4.0 sample Q14 LFO modulation smears standing-wave eigenmodes */
+        int32_t c_l1 = fx_read_interp_q14(fx->comb_l1, ADRIFT_FX_COMB_MASK, comb_w,
+                                          (1499 << 14) + (sin1_l * 2));
+        int32_t c_r1 = fx_read_interp_q14(fx->comb_r1, ADRIFT_FX_COMB_MASK, comb_w,
+                                          (1613 << 14) + (sin1_r * 2));
+        int32_t c_l2 = fx_read_interp_q14(fx->comb_l2, ADRIFT_FX_COMB_MASK, comb_w,
+                                          (1777 << 14) + (sin2_l * 2));
+        int32_t c_r2 = fx_read_interp_q14(fx->comb_r2, ADRIFT_FX_COMB_MASK, comb_w,
+                                          (1931 << 14) + (sin2_r * 2));
 
         /* Per-comb 1-pole HF damping filter + tiny DC leak (-1/512) to prevent DC buildup */
         damp_l1 += dsp_mul_q15(c_l1 - damp_l1, rvb_damp_q15);
@@ -469,15 +497,15 @@ static DSP_HOT_RAM int32_t fx_pass_reverb_fdn(adrift_fx_state_t *fx,
         int32_t tank_r = dsp_sat_q15(c_r1 - c_r2);
 
         /* Modulated Output Allpass Diffusers (L: 317 +/- 8, R: 353 +/- 8, g = 0.5)
-         * Fractional Q8 interpolation prevents ~32 Hz integer delay-step zipper clicks. */
-        int32_t mod_l_q8 = (317 << 8) + (sin2_l >> 4);
-        int32_t mod_r_q8 = (353 << 8) + (sin2_r >> 4);
-        int32_t zo_l = fx_read_interp_q8(fx->ap_out_l, ADRIFT_FX_AP2_MASK, ap_out_w, mod_l_q8);
+         * Fractional Q14 interpolation prevents integer delay-step zipper clicks. */
+        int32_t mod_l_q14 = (317 << 14) + (sin2_l * 4);
+        int32_t mod_r_q14 = (353 << 14) + (sin2_r * 4);
+        int32_t zo_l = fx_read_interp_q14(fx->ap_out_l, ADRIFT_FX_AP2_MASK, ap_out_w, mod_l_q14);
         int32_t vo_l = dsp_sat_q15(tank_l + (zo_l >> 1));
         fx->ap_out_l[ap_out_w] = (int16_t)vo_l;
         int32_t out_l = dsp_sat_q15(zo_l - (vo_l >> 1));
 
-        int32_t zo_r = fx_read_interp_q8(fx->ap_out_r, ADRIFT_FX_AP2_MASK, ap_out_w, mod_r_q8);
+        int32_t zo_r = fx_read_interp_q14(fx->ap_out_r, ADRIFT_FX_AP2_MASK, ap_out_w, mod_r_q14);
         int32_t vo_r = dsp_sat_q15(tank_r + (zo_r >> 1));
         fx->ap_out_r[ap_out_w] = (int16_t)vo_r;
         int32_t out_r = dsp_sat_q15(zo_r - (vo_r >> 1));
@@ -669,9 +697,10 @@ void adrift_fx_process(adrift_fx_state_t *fx,
                        rvb_mix_param > 0 || comp_mix_param > 0);
     if (!any_active) {
         if (fx->buffers_dirty) {
-            int32_t saved_len = fx->delay_len_q8;
+            int32_t saved_len_q14 = fx->delay_len_q14;
             adrift_fx_reset(fx);
-            fx->delay_len_q8 = saved_len;
+            fx->delay_len_q14 = saved_len_q14;
+            fx->delay_len_q8  = saved_len_q14 >> 6;
         }
         return;
     }
@@ -680,20 +709,24 @@ void adrift_fx_process(adrift_fx_state_t *fx,
     fx_chunk_scratch_t *sc = &g_fx_scratch;
     fx_block_coefs_t   *c  = &sc->coefs;
 
-    /* Stage 1: Stereo BBD Dimension Chorus parameters */
+    /* Stage 1: Stereo BBD Dimension Chorus parameters
+     * Lush Dimension-style excursion (~18..74 samples = 0.41..1.68 ms) and quadrature rates
+     * (~0.39..0.83 Hz + ~1.15..1.82 Hz) keep peak Doppler detune <= +-20 cents without seasick warble. */
     c->chorus_wet_q15  = (chorus_mix_param << 5); /* 0..32736 */
-    c->chorus_depth_q8 = 6400 + ((chorus_mix_param * 48000) >> 10); /* ~25 .. 212 samples in Q8 */
-    uint32_t lfo1_inc  = 58000u + ((uint32_t)chorus_mix_param * 72u); /* ~0.60 Hz .. 1.35 Hz */
-    uint32_t lfo2_inc  = 195000u + ((uint32_t)chorus_mix_param * 95u); /* ~2.0 Hz .. 3.0 Hz */
+    c->chorus_depth_q9 = (18 << 9) + (chorus_mix_param * 28); /* ~18 .. 74 samples in Q9 */
+    uint32_t lfo1_inc  = 38000u + ((uint32_t)chorus_mix_param * 42u); /* ~0.39 Hz .. 0.83 Hz */
+    uint32_t lfo2_inc  = 112000u + ((uint32_t)chorus_mix_param * 64u); /* ~1.15 Hz .. 1.82 Hz */
 
     /* Stage 2: Stereo Ping-Pong Tape Delay parameters */
-    /* 20 ms (882 samples) .. 360 ms (15882 samples) in Q8, or tempo-synced to 24 PPQN MIDI clock */
+    /* 20 ms (882 samples) .. 360 ms (15882 samples) in Q14, or tempo-synced to 24 PPQN MIDI clock */
     if (fx->clk_period_q4 > 0u) {
-        uint32_t pulses  = adrift_fx_delay_subdiv_pulses(delay_time_param);
-        int32_t  sync_q8 = (int32_t)((pulses * fx->clk_period_q4) << 4);
-        c->target_delay_q8 = dsp_clamp_i32(sync_q8, 882 << 8, 15882 << 8);
+        uint32_t pulses   = adrift_fx_delay_subdiv_pulses(delay_time_param);
+        uint32_t prod_q4  = pulses * fx->clk_period_q4;
+        if (prod_q4 < (882u << 4))   prod_q4 = (882u << 4);
+        if (prod_q4 > (15882u << 4)) prod_q4 = (15882u << 4);
+        c->target_delay_q14 = (int32_t)(prod_q4 << 10);
     } else {
-        c->target_delay_q8 = (882 + ((delay_time_param * 15000) >> 10)) << 8;
+        c->target_delay_q14 = (882 + ((delay_time_param * 15000) >> 10)) << 14;
     }
     c->delay_fb_q15  = (delay_fb_param * 30146) >> 10; /* up to ~92% feedback */
     c->delay_wet_q15 = (delay_mix_param << 5);

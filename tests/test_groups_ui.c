@@ -789,6 +789,56 @@ void test_voice_groups_and_save_menu(const char *wav_dir) {
           s->groups[0].num_voices == 3u && s->groups[1].num_voices == 0u,
           "OCT+ on P1 (cursor 2) did not restore G1=3, G2=0 default");
 
+    /* Regression test: select P19 SUPER BASS (cursor 20, index 18) via Presets Browser,
+     * trigger notes, and verify 8-voice ADRIFT_GROUP_SUPER cold phase-lock + active retrigger
+     * preserves companion oscillator phases via lightweight audibility capture without stack overflow */
+    memset(&in_st, 0, sizeof(in_st));
+    in_st.enc_delta[ADRIFT_ENC_PRESETS] = 1; /* Opens at P1 (cursor 2) */
+    in_st.master_pot                    = -1;
+    adrift_dirty_clear(&dirty);
+    adrift_app_tick_ui(&in_st, fb, &dirty);
+    in_st.enc_delta[ADRIFT_ENC_PRESETS] = 18; /* Scroll 2 -> 20 (P19 SUPER BASS) */
+    adrift_dirty_clear(&dirty);
+    adrift_app_tick_ui(&in_st, fb, &dirty);
+    memset(&in_st, 0, sizeof(in_st));
+    in_st.buttons_pressed = ADRIFT_BTN_OCT_UP;
+    in_st.master_pot      = -1;
+    adrift_dirty_clear(&dirty);
+    adrift_app_tick_ui(&in_st, fb, &dirty);
+    CHECK(!ui->in_preset_menu && s->preset_index == 18u &&
+          strcmp(s->preset_name, "SUPER BASS") == 0 &&
+          s->groups[0].assign_mode == ADRIFT_GROUP_SUPER && s->groups[0].num_voices == 8u &&
+          s->groups[1].assign_mode == ADRIFT_GROUP_UNISON && s->groups[1].num_voices == 4u,
+          "Selecting P19 SUPER BASS via Presets Browser failed (pst=%u, name=%s, G1=%u/%u)",
+          s->preset_index, s->preset_name, s->groups[0].assign_mode, s->groups[0].num_voices);
+
+    /* Cold Note-On from silence locks all 8 SUPER VCO slots to Demon Core phase spread */
+    adrift_synth_handle_midi(s, 0x90u, 36u, 112u);
+    for (uint8_t k = 0u; k < 8u; k++) {
+        CHECK(s->voices[k].active && s->voices[k].group_slot == k &&
+              s->voices[k].exc.vco_phase == (uint32_t)k * 0x24924924u,
+              "SUPER BASS cold Note-On failed Demon Core phase lock on slot %u (ph=0x%08x)",
+              k, s->voices[k].exc.vco_phase);
+    }
+    adrift_synth_render_block(s, pcm, 512u, NULL, 0u);
+    CHECK(compute_rms_dbfs(pcm, 0u, 512u) > -30.0, "SUPER BASS produced silence after Note-On");
+
+    /* Retrigger while sounding (non-legato & legato): companion slots 2..7 must inherit carrier
+     * audibility from slots 0..1 without hard-snapping VCO phases back to k * 0x24924924u */
+    s->groups[0].patch.legato = false;
+    uint32_t pre_ph2 = s->voices[2].exc.vco_phase;
+    uint32_t pre_ph7 = s->voices[7].exc.vco_phase;
+    CHECK(pre_ph2 != 2u * 0x24924924u && pre_ph7 != 7u * 0x24924924u,
+          "Expected companion SUPER VCOs to advance phase during audio block");
+    adrift_synth_handle_midi(s, 0x90u, 41u, 118u);
+    CHECK(s->voices[2].exc.vco_phase == pre_ph2 && s->voices[7].exc.vco_phase == pre_ph7,
+          "SUPER BASS retrigger while audible hard-snapped companion VCO phase (ph2=0x%08x vs 0x%08x)",
+          s->voices[2].exc.vco_phase, pre_ph2);
+    adrift_synth_render_block(s, pcm, 512u, NULL, 0u);
+    CHECK(compute_rms_dbfs(pcm, 0u, 512u) > -30.0, "SUPER BASS retrigger produced silence");
+    adrift_synth_all_notes_off(s, true);
+    adrift_synth_load_preset(s, 0u);
+
     /* 8g. Scale Browser UI (ALGORITHM encoder open/scroll/wrap, KNOB1 root, OCT- cancel, OCT+ apply, white-key mapping) */
     CHECK(!ui->in_scale_menu && s->kbd_scale == ADRIFT_SCALE_CHROMATIC && s->kbd_scale_root == 0u,
           "Expected default Chromatic scale (0) and C root (0) at boot (got scale=%u, root=%u)",

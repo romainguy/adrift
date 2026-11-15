@@ -400,20 +400,32 @@ static uint32_t voice_steal_energy(const adrift_voice_t *vc, const adrift_patch_
     return (env2_q15 * src_q15) >> 15;
 }
 
+typedef struct {
+    bool voice_audible;
+    bool exc_audible;
+} voice_aud_ref_t;
+
+static voice_aud_ref_t capture_voice_aud_ref(const adrift_voice_t *vc, const adrift_patch_t *p) {
+    voice_aud_ref_t r;
+    r.voice_audible = vc->active && (vc->env2.stage != ADRIFT_ENV_IDLE || p->env2.drone_hold);
+    r.exc_audible   = r.voice_audible &&
+                      (vc->env1.level_q30 > (1 << 20) || vc->env1.declick_q30 > (1 << 20) || p->env1.drone_hold);
+    return r;
+}
+
 static void trigger_voice_on_ex(adrift_synth_t *s,
                                 uint8_t g,
                                 uint8_t v,
                                 uint8_t note,
                                 uint8_t velocity,
                                 bool legato,
-                                const adrift_voice_t *aud_ref) {
+                                const voice_aud_ref_t *aud_ref) {
     adrift_voice_t *vc = &s->voices[v];
     adrift_group_t *gp = &s->groups[g];
-    const adrift_voice_t *ref = aud_ref ? aud_ref : vc;
+    voice_aud_ref_t ar = aud_ref ? *aud_ref : capture_voice_aud_ref(vc, &gp->patch);
     bool was_active    = vc->active;
-    bool voice_audible = ref->active && (ref->env2.stage != ADRIFT_ENV_IDLE || gp->patch.env2.drone_hold);
-    bool exc_audible   = voice_audible &&
-                         (ref->env1.level_q30 > (1 << 20) || ref->env1.declick_q30 > (1 << 20) || gp->patch.env1.drone_hold);
+    bool voice_audible = ar.voice_audible;
+    bool exc_audible   = ar.exc_audible;
     uint8_t prev_note  = vc->note;
 
     /* Polyphonic portamento: when Round-Robin allocates an idle voice with glide > 2,
@@ -492,7 +504,7 @@ static void trigger_voice_on_ex(adrift_synth_t *s,
 }
 
 static void trigger_voice_on(adrift_synth_t *s, uint8_t g, uint8_t v, uint8_t note, uint8_t velocity, bool legato) {
-    trigger_voice_on_ex(s, g, v, note, velocity, legato, (const adrift_voice_t *)0);
+    trigger_voice_on_ex(s, g, v, note, velocity, legato, (const voice_aud_ref_t *)0);
 }
 
 static void trigger_voice_off(adrift_synth_t *s, uint8_t g, uint8_t v) {
@@ -583,19 +595,21 @@ void adrift_synth_voice_note_on(adrift_synth_t *s, uint8_t g, uint8_t note, uint
     /* Unison / Super mode (stacks all voices in the group) or 1-voice Mono group */
     if (adrift_group_is_stacked(gp->assign_mode) || n_owned == 1u) {
         bool was_held = (gp->mono_len > 0u);
-        adrift_voice_t super_ref[2];
+        /* Capture only the 2-byte pre-trigger audibility flags of BBD carrier slots 0 & 1
+         * (never copy ~4.6 KB adrift_voice_t structs onto the 7.75 KB audio ISR stack). */
+        voice_aud_ref_t super_ref[2] = { { false, false }, { false, false } };
         if (gp->assign_mode == ADRIFT_GROUP_SUPER && n_owned > 2u) {
-            super_ref[0] = s->voices[v_list[0]];
-            super_ref[1] = s->voices[v_list[1]];
+            super_ref[0] = capture_voice_aud_ref(&s->voices[v_list[0]], &gp->patch);
+            super_ref[1] = capture_voice_aud_ref(&s->voices[v_list[1]], &gp->patch);
         }
         push_group_mono_stack(gp, note, velocity);
         for (uint8_t k = 0; k < n_owned; k++) {
             uint8_t v = v_list[k];
             bool v_was_active = was_held || s->voices[v].sustained ||
                                 (gp->patch.env2.drone_hold && s->voices[v].age > 0u);
-            const adrift_voice_t *ref = (gp->assign_mode == ADRIFT_GROUP_SUPER && n_owned > 2u && k >= 2u)
-                                            ? &super_ref[k & 1u]
-                                            : (const adrift_voice_t *)0;
+            const voice_aud_ref_t *ref = (gp->assign_mode == ADRIFT_GROUP_SUPER && n_owned > 2u && k >= 2u)
+                                             ? &super_ref[k & 1u]
+                                             : (const voice_aud_ref_t *)0;
             trigger_voice_on_ex(s, g, v, note, velocity, gp->patch.legato && v_was_active, ref);
         }
         return;

@@ -22,6 +22,7 @@ from pathlib import Path
 APP_XIP = 0x02000120
 LOADER_LOAD = 0x01C0A800
 LOADER_NAME = b"usb_hid_ota.bin"
+MAX_FN_STACK_BYTES = 3584
 DIS_LINE = re.compile(r"^\s*([0-9a-f]+):\s+((?:[0-9a-f]{2} )+)\s*\t(.*)$")
 
 
@@ -169,6 +170,40 @@ def find_mul64_near_loads(dis: str, window: int = 4) -> list[str]:
     return found
 
 
+def find_stack_frames(dis: str) -> tuple[list[tuple[int, str]], list[str]]:
+    """Measure per-function static stack frames and detect dynamic sp adjustments."""
+    frames: list[tuple[int, str]] = []
+    dyn_alloca: list[str] = []
+    fn = ""
+    cur_bb = 0
+    best_bb = 0
+    for ln in dis.splitlines() + ["end:"]:
+        m_fn = re.match(r"^([A-Za-z_.$][\w.$]*):$", ln.strip())
+        if m_fn and not m_fn.group(1).startswith(".GJT"):
+            if fn and not fn.startswith("__"):
+                frames.append((best_bb, fn))
+            fn = m_fn.group(1)
+            cur_bb = 0
+            best_bb = 0
+            continue
+        mm = DIS_LINE.match(ln)
+        if not mm:
+            continue
+        ins = mm.group(3)
+        if re.search(r"\bsp\s*(?:[+-]=|=)\s*r\d+\b", ins):
+            if fn and fn not in dyn_alloca:
+                dyn_alloca.append(fn)
+        m_sp = re.search(r"\bsp \+= -(\d+)\b", ins)
+        if m_sp:
+            cur_bb += int(m_sp.group(1))
+            if cur_bb > best_bb:
+                best_bb = cur_bb
+        elif re.search(r"\b(?:call|goto|if|rts|reti)\b|\{pc", ins):
+            cur_bb = 0
+    frames.sort(reverse=True)
+    return frames, dyn_alloca
+
+
 def sym_addr(syms: str, name: str) -> int:
     m = re.search(r"^([0-9a-f]+) .*\s" + re.escape(name) + r"$", syms, re.M)
     if not m:
@@ -220,6 +255,21 @@ def cmd_pack_app(
             + " (move int64_t multiplies into noinline helpers)"
         )
 
+    # Verify bounded per-function stack frames (7.75 KB ISR SSP + 256 B guard bands)
+    frames, dyn_alloca = find_stack_frames(dis + "\n" + rt_dis)
+    if dyn_alloca:
+        raise SystemExit(
+            "pack-app: forbidden dynamic stack allocation (VLA/alloca) in: "
+            + ", ".join(dyn_alloca)
+        )
+    oversized = [(sz, fn) for sz, fn in frames if sz > MAX_FN_STACK_BYTES]
+    if oversized:
+        desc = ", ".join(f"{fn} ({sz} B)" for sz, fn in oversized)
+        raise SystemExit(
+            f"pack-app: stack frame exceeds {MAX_FN_STACK_BYTES} B limit: {desc}"
+        )
+    max_sp, max_sp_fn = frames[0] if frames else (0, "none")
+
     for bin_path, load_sym in ((rt_bin, "_rt_load"), (data_bin, "_data_load")):
         load = sym_addr(syms, load_sym)
         if load % 4 != 0:
@@ -245,6 +295,7 @@ def cmd_pack_app(
     print(
         f"  [app]    XIP={len(img)} / {xip_budget} B ({len(img) * 100.0 / xip_budget:.1f}%), "
         f"SRAM={ram_used} / {ram_budget} B ({ram_used * 100.0 / ram_budget:.1f}%), "
+        f"max-stack={max_sp} B ({max_sp_fn}), "
         f"pi32v2-mul64-check=CLEAN, soft-double=NONE"
     )
 

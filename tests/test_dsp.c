@@ -292,9 +292,78 @@ void test_micro_acb_exciter(void) {
           "VCO LEV did not proportionally scale combined wave+noise level (v900=%d, v450=%d, n900=%d, n450=%d)",
           vco_900, vco_450, noise_900, noise_450);
 
+    /* 1f. High-register anti-aliasing: PolyBLAMP Triangle, Sine folder taper & Pluck Nyquist gate */
+    adrift_app_init();
+    s = adrift_app_get_synth();
+    p = &s->groups[0].patch;
+    p->dry_wet          = 0;
+    p->in_lpf_cutoff    = 1023;
+    p->in_lpf_res       = 0;
+    p->exc.vco_level    = 900;
+    p->exc.noise_level  = 0;
+    p->exc.analog_drift = 0;
+    p->exc.wave_morph   = 341; /* Triangle */
+    p->env1.onset_delay = 0;
+    p->env1.attack      = 0;
+    p->env1.sustain     = 1023;
+    p->lfo_depth        = 0;
+    p->master_vol       = 900;
+    adrift_synth_note_on(s, 105u, 127u); /* A7 = 3520.0 Hz */
+    render_frames(pcm, N);
+    double f_a7          = 3520.0;
+    double tri_h1_db     = goertzel_mag_db(pcm, 4096u, 8192u, f_a7);
+    double tri_alias9_db = goertzel_mag_db(pcm, 4096u, 8192u, FS_EXACT - 9.0 * f_a7);  /* ~12.44 kHz */
+    double tri_alias11_db= goertzel_mag_db(pcm, 4096u, 8192u, FS_EXACT - 11.0 * f_a7); /* ~5.40 kHz */
+    CHECK((tri_alias9_db - tri_h1_db) < -50.0 && (tri_alias11_db - tri_h1_db) < -52.0,
+          "High-register Triangle PolyBLAMP aliasing too high (9th=%.1f dBc, 11th=%.1f dBc)",
+          tri_alias9_db - tri_h1_db, tri_alias11_db - tri_h1_db);
+
+    adrift_synth_all_notes_off(s, true);
+    p->exc.wave_morph   = 0;   /* Sine */
+    p->exc.analog_drift = 600; /* Strong drift/folder enabled: verify high-pitch folder taper */
+    adrift_synth_note_on(s, 110u, 127u); /* D8 = 4698.63 Hz */
+    render_frames(pcm, N);
+    double f_d8           = 440.0 * pow(2.0, (110.0 - 69.0) / 12.0);
+    double sin_h1_db      = goertzel_mag_db(pcm, 4096u, 8192u, f_d8);
+    double sin_alias5_db  = goertzel_mag_db(pcm, 4096u, 8192u, FS_EXACT - 5.0 * f_d8); /* ~20.62 kHz */
+    double sin_alias7_db  = goertzel_mag_db(pcm, 4096u, 8192u, FS_EXACT - 7.0 * f_d8); /* ~11.23 kHz */
+    CHECK((sin_alias5_db - sin_h1_db) < -55.0 && (sin_alias7_db - sin_h1_db) < -55.0,
+          "High-register Sine wave-folder aliasing too high (5th=%.1f dBc, 7th=%.1f dBc)",
+          sin_alias5_db - sin_h1_db, sin_alias7_db - sin_h1_db);
+
+    /* Direct exciter Pluck impulse Nyquist gating above Fs/4 (MIDI 125 = F9 = 11.18 kHz: 2*f0, 3*f0, 5*f0 > Fs/2) */
+    adrift_exciter_t exc_hi;
+    adrift_exciter_init(&exc_hi, 0u);
+    adrift_exciter_params_t ep_hi = p->exc;
+    ep_hi.vco_level   = 0;    /* Isolate pick impulse only (sub_g = 0 when vco_level = 0) */
+    ep_hi.noise_level = 0;
+    ep_hi.pluck       = 1023;
+    ep_hi.analog_drift= 0;
+    adrift_exciter_prepare_block(&exc_hi, &ep_hi, 125 << 8, 0, 0, 0, &morph_out);
+    adrift_exciter_trigger(&exc_hi, &ep_hi, 127u, false, 0u);
+    int32_t imp_amp_ref = exc_hi.impulse_amp_q15;
+    uint32_t dt_ref     = exc_hi.vco_inc;
+    int32_t imp_buf[64] = {0};
+    adrift_exciter_process(&exc_hi, &ep_hi, 0, imp_buf, 64u);
+    /* Above Fs/4, h2/h3/h5 must be completely gated to 0, leaving only the bandlimited fundamental burst */
+    uint32_t ref_ph = 1u;
+    int32_t max_alias_err = 0;
+    for (int i = 0; i < 16; i++) {
+        int32_t expected = 0;
+        if (ref_ph != 0u) {
+            expected = dsp_mul_q15(dsp_sine_lut_q15(ref_ph) >> 1, imp_amp_ref);
+            uint32_t nxt = ref_ph + dt_ref;
+            ref_ph = (nxt < ref_ph) ? 0u : nxt;
+        }
+        int32_t err = abs(imp_buf[i] - expected);
+        if (err > max_alias_err) max_alias_err = err;
+    }
+    CHECK(max_alias_err == 0,
+          "High-note pluck impulse leaked above-Nyquist h2/h3/h5 harmonics (max_err=%d)", max_alias_err);
+
     free(pcm);
-    printf("  -> PASS (Sine H2=%.1f dBc, PWM DC=%.1f LSB, S&H held=%d/255)\n",
-           h2_db - h1_db, mean_dc, held_pairs);
+    printf("  -> PASS (Sine H2=%.1f dBc, PWM DC=%.1f LSB, S&H held=%d/255, Tri A7 alias=%.1f dBc)\n",
+           h2_db - h1_db, mean_dc, held_pairs, tri_alias9_db - tri_h1_db);
 }
 
 /* ---- 2. Envelope 1 Onset Delay & Loop Mode ---- */

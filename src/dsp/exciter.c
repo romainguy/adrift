@@ -41,7 +41,10 @@ void adrift_exciter_init(adrift_exciter_t *exc, uint8_t voice_idx) {
     exc->rng_state       = 0x9E3779B9u ^ ((uint32_t)(voice_idx + 1u) * 0x85EBCA6Bu);
     exc->sh_phase        = 0x40000000u;
     exc->sh_inc          = 0u;
+    exc->sh_inv_dt16     = 1u << 16;
     exc->sh_held_q15     = dsp_white_noise_q15(&exc->rng_state);
+    exc->sh_prev_q15     = exc->sh_held_q15;
+    exc->sh_next_q15     = exc->sh_held_q15;
 
     exc->vco_gain_q15       = 0;
     exc->noise_gain_q15     = 0;
@@ -122,6 +125,33 @@ DSP_ALWAYS_INLINE int32_t polyblep_edge_q15(uint32_t phase_diff, uint32_t dt, ui
     return 0;
 }
 
+DSP_ALWAYS_INLINE int32_t polyblamp_tri_q15(uint32_t phase, uint32_t dt, uint32_t inv_dt16) {
+    /*
+     * 2-point cubic B-spline PolyBLAMP for triangle slope reversals at phase == 0 (+4*d jump)
+     * and phase == 0x80000000 (-4*d jump), where d = dt >> 16.
+     * Single unsigned doubled-phase window test rejects both non-corner regions at once.
+     */
+    if (dt < 0x40000000u) {
+        uint32_t dt2 = dt << 1;
+        uint32_t p31 = phase << 1;
+        if ((uint32_t)(p31 + dt2) <= (dt2 << 1)) {
+            uint32_t rem2 = (p31 < dt2) ? p31 : (0u - p31);
+            if (rem2 < dt2) {
+                uint32_t rem16 = rem2 >> 17; /* |phase_diff| >> 16 */
+                int32_t  u     = (int32_t)((rem16 * inv_dt16) >> 15);
+                if (u > 32767) u = 32767;
+                int32_t  om    = 32768 - u;
+                int32_t  om2   = (om * om) >> 15;
+                int32_t  om3   = (om2 * om) >> 15;
+                int32_t  d     = (int32_t)(dt >> 16);
+                int32_t  corr  = ((((d * om3) >> 14) * 21845) + 32768) >> 16; /* (2/3) * d * (1-u)^3 */
+                return ((uint32_t)(phase + 0x40000000u) < 0x80000000u) ? corr : -corr;
+            }
+        }
+    }
+    return 0;
+}
+
 void adrift_exciter_prepare_block_q16(adrift_exciter_t *exc,
                                       const adrift_exciter_params_t *p,
                                       int32_t base_note_pitch_q16,
@@ -185,8 +215,12 @@ void adrift_exciter_prepare_block_q16(adrift_exciter_t *exc,
             exc->sh_inc = 0u; /* pure continuous white noise flag */
         } else {
             /* MIDI 16 (~20.6 Hz) .. MIDI 136 (~21.1 kHz): 120 semitones over 0..1000 */
-            int32_t sh_pitch_q8 = (16 << 8) + ((shr * (120 << 8)) / 1000);
-            exc->sh_inc = dsp_pitch_to_phase_inc(sh_pitch_q8);
+            int32_t  sh_pitch_q8 = (16 << 8) + ((shr * (120 << 8)) / 1000);
+            uint32_t sh_inc      = dsp_pitch_to_phase_inc(sh_pitch_q8);
+            exc->sh_inc          = sh_inc;
+            uint32_t sh_dt16     = sh_inc >> 16;
+            if (sh_dt16 < 1u) sh_dt16 = 1u;
+            exc->sh_inv_dt16     = (1u << 30) / sh_dt16;
         }
     }
 }
@@ -202,25 +236,46 @@ void adrift_exciter_prepare_block(adrift_exciter_t *exc,
                                      mod_wave_1023, mod_pw_1023, out_morph_1023);
 }
 
+DSP_ALWAYS_INLINE int32_t exciter_nyq_taper_q15(uint32_t dt,
+                                                uint32_t dt_start,
+                                                uint32_t dt_end,
+                                                uint32_t inv_mul,
+                                                uint32_t inv_shift) {
+    if (dt <= dt_start) return 32768;
+    if (dt >= dt_end)   return 0;
+    uint32_t rem16 = (dt_end - dt) >> 16;
+    int32_t  g     = (int32_t)((rem16 * inv_mul) >> inv_shift);
+    return (g > 32768) ? 32768 : g;
+}
+
 DSP_ALWAYS_INLINE int32_t exciter_vco_sample(uint32_t phase,
                                              uint32_t dt,
                                              uint32_t inv_dt16,
                                              uint32_t pw_thr,
                                              int32_t k_sag,
                                              int32_t k_sym,
+                                             int32_t sine_lut_mix_q15,
+                                             int32_t tri_lut_mix_q15,
                                              int32_t w0_q15,
                                              int32_t w1_q15,
                                              int32_t zone) {
     if (zone == 0) {
-        uint32_t p16 = phase >> 16;
-        int32_t tri_lin = (p16 < 32768u)
-                              ? ((int32_t)(p16 << 1) - 32768)
-                              : (32767 - (int32_t)((p16 - 32768u) << 1));
-        int32_t tri_2 = ((tri_lin * tri_lin) >> 15) - 10923;
-        int32_t tri   = dsp_sat_q15(tri_lin - ((k_sag * tri_2) >> 16));
-        int32_t z     = dsp_sat_q15(tri + ((k_sym * tri_2) >> 15));
-        int32_t z2    = (z * z) >> 15;
-        int32_t sine  = (z * (98304 - z2)) >> 16;
+        uint32_t p17     = phase >> 15;
+        int32_t  tri_raw = (p17 < 65536u) ? ((int32_t)p17 - 32768) : (98303 - (int32_t)p17);
+        int32_t  tri_blp = dsp_sat_q15(tri_raw + polyblamp_tri_q15(phase, dt, inv_dt16));
+        int32_t  tri_2   = ((tri_blp * tri_blp) >> 15) - 10923;
+        int32_t  tri     = dsp_sat_q15(tri_blp - ((k_sag * tri_2) >> 16));
+        int32_t  z       = dsp_sat_q15(tri + ((k_sym * tri_2) >> 15));
+        int32_t  z2      = (z * z) >> 15;
+        int32_t  sine    = (z * (98304 - z2)) >> 16;
+        if (sine_lut_mix_q15 > 0) {
+            int32_t fund = dsp_sine_lut_q15(phase - 0x40000000u); /* -cos(phase), phase-aligned */
+            sine += ((fund - sine) * sine_lut_mix_q15) >> 15;
+            if (tri_lut_mix_q15 > 0) {
+                int32_t tri_fund = (fund * 26561) >> 15; /* (8 / pi^2) fundamental when 3*f0 -> Fs/2 */
+                tri += ((tri_fund - tri) * tri_lut_mix_q15) >> 15;
+            }
+        }
         return dsp_sat_q15(((sine * w0_q15) + (tri * w1_q15)) >> 15);
     }
 
@@ -233,12 +288,15 @@ DSP_ALWAYS_INLINE int32_t exciter_vco_sample(uint32_t phase,
     int32_t  ramp      = dsp_sat_q15(r_blep - ((k_sag * r2_zm) >> 15));
 
     if (zone == 1) {
-        uint32_t p16 = phase >> 16;
-        int32_t tri_lin = (p16 < 32768u)
-                              ? ((int32_t)(p16 << 1) - 32768)
-                              : (32767 - (int32_t)((p16 - 32768u) << 1));
-        int32_t tri_2 = ((tri_lin * tri_lin) >> 15) - 10923;
-        int32_t tri   = dsp_sat_q15(tri_lin - ((k_sag * tri_2) >> 16));
+        uint32_t p17     = phase >> 15;
+        int32_t  tri_raw = (p17 < 65536u) ? ((int32_t)p17 - 32768) : (98303 - (int32_t)p17);
+        int32_t  tri_blp = dsp_sat_q15(tri_raw + polyblamp_tri_q15(phase, dt, inv_dt16));
+        int32_t  tri_2   = ((tri_blp * tri_blp) >> 15) - 10923;
+        int32_t  tri     = dsp_sat_q15(tri_blp - ((k_sag * tri_2) >> 16));
+        if (tri_lut_mix_q15 > 0) {
+            int32_t tri_fund = (dsp_sine_lut_q15(phase - 0x40000000u) * 26561) >> 15;
+            tri += ((tri_fund - tri) * tri_lut_mix_q15) >> 15;
+        }
         return dsp_sat_q15(((tri * w0_q15) + (ramp * w1_q15)) >> 15);
     } else {
         int32_t pulse     = (r_phase < pw_thr) ? -18432 : 18432;
@@ -271,10 +329,20 @@ DSP_ALWAYS_INLINE void exciter_loop_zone(adrift_exciter_t *exc,
     uint32_t rng      = exc->rng_state;
     uint32_t sh_inc   = exc->sh_inc;
 
+    int32_t sine_lut_mix_q15 = 0;
+    int32_t tri_lut_mix_q15  = 0;
+    if (zone == 0 && dt > 0x0C000000u) {
+        sine_lut_mix_q15 = 32768 - exciter_nyq_taper_q15(dt, 0x0C000000u, 0x19990000u, 38562u, 12u);
+    }
+    if ((zone == 0 || zone == 1) && dt > 0x1E000000u) {
+        tri_lut_mix_q15 = 32768 - exciter_nyq_taper_q15(dt, 0x1E000000u, 0x2AAA0000u, 41400u, 12u);
+    }
+
     if (pluck <= 0 && sh_inc == 0u) {
         for (uint32_t i = 0; i < frames; i++) {
             int32_t vco_raw = exciter_vco_sample(phase, dt, inv_dt16, pw_thr,
-                                                 k_sag, k_sym, w0_q15, w1_q15, zone);
+                                                 k_sag, k_sym, sine_lut_mix_q15, tri_lut_mix_q15,
+                                                 w0_q15, w1_q15, zone);
             hf_slew += ((vco_raw - hf_slew) * 29000) >> 15;
             int32_t vco_ac = hf_slew - (ac_cap >> 8);
             ac_cap += (vco_ac * 17920) >> 15;
@@ -287,16 +355,28 @@ DSP_ALWAYS_INLINE void exciter_loop_zone(adrift_exciter_t *exc,
             out_q15[i] = dsp_sat_q15(mixed);
         }
     } else {
-        uint32_t sh_phase = exc->sh_phase;
-        int32_t  sh_held  = exc->sh_held_q15;
-        uint32_t sub_ph   = exc->sub_phase;
-        uint32_t sub_dt   = dt >> 1;
-        uint32_t imp_ph   = exc->impulse_phase;
-        int32_t  imp_amp  = exc->impulse_amp_q15;
+        uint32_t sh_phase    = exc->sh_phase;
+        uint32_t sh_inv_dt16 = exc->sh_inv_dt16;
+        int32_t  sh_prev     = exc->sh_prev_q15;
+        int32_t  sh_held     = exc->sh_held_q15;
+        int32_t  sh_next     = exc->sh_next_q15;
+        uint32_t sub_ph      = exc->sub_phase;
+        uint32_t sub_dt      = dt >> 1;
+        uint32_t imp_ph      = exc->impulse_phase;
+        int32_t  imp_amp     = exc->impulse_amp_q15;
+        int32_t  imp_h2_g    = 32768;
+        int32_t  imp_h3_g    = 32768;
+        int32_t  imp_h5_g    = 32768;
+        if (pluck > 0 && imp_ph != 0u && dt > 0x12000000u) {
+            imp_h5_g = exciter_nyq_taper_q15(dt, 0x12000000u, 0x19999999u, 69012u, 12u);
+            imp_h3_g = exciter_nyq_taper_q15(dt, 0x1E000000u, 0x2AAAAAAAu, 41400u, 12u);
+            imp_h2_g = exciter_nyq_taper_q15(dt, 0x2D000000u, 0x40000000u, 55189u, 13u);
+        }
 
         for (uint32_t i = 0; i < frames; i++) {
             int32_t vco_raw = exciter_vco_sample(phase, dt, inv_dt16, pw_thr,
-                                                 k_sag, k_sym, w0_q15, w1_q15, zone);
+                                                 k_sag, k_sym, sine_lut_mix_q15, tri_lut_mix_q15,
+                                                 w0_q15, w1_q15, zone);
             hf_slew += ((vco_raw - hf_slew) * 29000) >> 15;
             int32_t vco_ac = hf_slew - (ac_cap >> 8);
             ac_cap += (vco_ac * 17920) >> 15;
@@ -310,11 +390,20 @@ DSP_ALWAYS_INLINE void exciter_loop_zone(adrift_exciter_t *exc,
                 }
                 sub_ph += sub_dt;
                 if (imp_ph != 0u) {
-                    int32_t imp_s  = dsp_sine_lut_q15(imp_ph);
-                    int32_t imp_h2 = dsp_sine_lut_q15(imp_ph << 1) >> 1;
-                    int32_t imp_h3 = dsp_sine_lut_q15(imp_ph * 3u) >> 2;
-                    int32_t imp_h5 = dsp_sine_lut_q15(imp_ph * 5u) >> 2;
-                    int32_t imp_w  = dsp_sat_q15((imp_s >> 1) + imp_h2 + imp_h3 + imp_h5);
+                    int32_t imp_acc = dsp_sine_lut_q15(imp_ph) >> 1;
+                    if (imp_h2_g > 0) {
+                        int32_t imp_h2 = dsp_sine_lut_q15(imp_ph << 1) >> 1;
+                        imp_acc += (imp_h2_g < 32768) ? ((imp_h2 * imp_h2_g) >> 15) : imp_h2;
+                    }
+                    if (imp_h3_g > 0) {
+                        int32_t imp_h3 = dsp_sine_lut_q15(imp_ph * 3u) >> 2;
+                        imp_acc += (imp_h3_g < 32768) ? ((imp_h3 * imp_h3_g) >> 15) : imp_h3;
+                    }
+                    if (imp_h5_g > 0) {
+                        int32_t imp_h5 = dsp_sine_lut_q15(imp_ph * 5u) >> 2;
+                        imp_acc += (imp_h5_g < 32768) ? ((imp_h5 * imp_h5_g) >> 15) : imp_h5;
+                    }
+                    int32_t imp_w = dsp_sat_q15(imp_acc);
                     pluck_sig += dsp_mul_q15(imp_w, imp_amp);
                     uint32_t next_imp = imp_ph + dt;
                     imp_ph = (next_imp < imp_ph) ? 0u : next_imp;
@@ -328,10 +417,30 @@ DSP_ALWAYS_INLINE void exciter_loop_zone(adrift_exciter_t *exc,
             } else {
                 uint32_t next_sh = sh_phase + sh_inc;
                 if (next_sh < sh_phase) {
-                    sh_held = wn;
+                    sh_prev = sh_held;
+                    sh_held = sh_next;
+                    sh_next = wn;
                 }
                 sh_phase = next_sh;
-                noise_sample = sh_held;
+                int32_t sh_s = sh_held;
+                if (sh_phase < sh_inc) {
+                    uint32_t u16 = sh_phase >> 16;
+                    int32_t  u   = (int32_t)((u16 * sh_inv_dt16) >> 15);
+                    if (u > 32767) u = 32767;
+                    int32_t  om  = 32768 - u;
+                    int32_t  w   = (om * om) >> 16;
+                    sh_s -= ((sh_held - sh_prev) * w) >> 15;
+                }
+                uint32_t rem_sh = 0u - sh_phase;
+                if (rem_sh < sh_inc) {
+                    uint32_t eps16 = rem_sh >> 16;
+                    int32_t  eps   = (int32_t)((eps16 * sh_inv_dt16) >> 15);
+                    if (eps > 32767) eps = 32767;
+                    int32_t  om    = 32768 - eps;
+                    int32_t  w     = (om * om) >> 16;
+                    sh_s += ((sh_next - sh_held) * w) >> 15;
+                }
+                noise_sample = dsp_sat_q15(sh_s);
             }
 
             vco_g   += vco_g_step;
@@ -343,7 +452,9 @@ DSP_ALWAYS_INLINE void exciter_loop_zone(adrift_exciter_t *exc,
         exc->sub_phase     = sub_ph;
         exc->impulse_phase = imp_ph;
         exc->sh_phase      = sh_phase;
+        exc->sh_prev_q15   = sh_prev;
         exc->sh_held_q15   = sh_held;
+        exc->sh_next_q15   = sh_next;
     }
 
     exc->vco_phase   = phase;
@@ -403,6 +514,13 @@ void adrift_exciter_process(adrift_exciter_t *exc,
     int32_t drift_scale = 256 + dsp_clamp_i32(p->analog_drift, 0, 1023); /* 256..1279 */
     int32_t k_sag = ((int32_t)exc->trim_sag_q15 * drift_scale) >> 9;     /* ~1000..6500 in Q15 */
     int32_t k_sym = ((int32_t)exc->trim_sym_q15 * drift_scale) >> 9;
+
+    /* Taper nonlinear wave-folder harmonics cleanly before they fold above Nyquist (~861 Hz .. 4.13 kHz) */
+    if (exc->vco_inc > 0x05000000u) {
+        int32_t fold_g = exciter_nyq_taper_q15(exc->vco_inc, 0x05000000u, 0x18000000u, 55189u, 13u);
+        k_sag = (k_sag * fold_g) >> 15;
+        k_sym = (k_sym * fold_g) >> 15;
+    }
 
     int32_t m_clamped = dsp_clamp_i32(morph_1023, 0, 1023);
     int32_t zone = 0;

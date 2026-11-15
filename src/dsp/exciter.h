@@ -48,7 +48,10 @@ typedef struct {
     uint32_t rng_state;
     uint32_t sh_phase;
     uint32_t sh_inc;
+    uint32_t sh_inv_dt16;
+    int32_t  sh_prev_q15;
     int32_t  sh_held_q15;
+    int32_t  sh_next_q15;
 
     /* Smoothed mixer gains */
     int32_t  vco_gain_q15;

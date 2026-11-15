@@ -27,6 +27,10 @@ typedef struct {
     int32_t               clk_drift_q16;    /* MN3101-style Ornstein-Uhlenbeck BBD clock wander */
     int32_t               prev_fb_q15;      /* Previous AC feedback sample for MOSFET C(V) dispersion */
     bool                  pitch_initialized;
+    bool                  delay_initialized;
+    bool                  steal_damp_pending;
+    int16_t               steal_tail_q15;   /* C0 de-click release tail when stealing an active BBD */
+    int16_t               steal_step_q15;
     adrift_onepole_lpf6_t fb_lpf;           /* 6 dB/oct feedback damping filter */
     adrift_onepole_lpf6_t aa_lpf;           /* 1024-stage BBD input anti-aliasing filter */
     adrift_onepole_lpf6_t clk_lpf;          /* 1024-stage BBD output reconstruction filter */

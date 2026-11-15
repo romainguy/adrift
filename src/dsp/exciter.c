@@ -43,10 +43,49 @@ void adrift_exciter_init(adrift_exciter_t *exc, uint8_t voice_idx) {
     exc->sh_inc          = 0u;
     exc->sh_held_q15     = dsp_white_noise_q15(&exc->rng_state);
 
-    exc->vco_gain_q15    = 0;
-    exc->noise_gain_q15  = 0;
-    exc->last_pitch_q16  = -0x7FFFFFFF;
-    exc->last_sh_rate    = -1;
+    exc->vco_gain_q15       = 0;
+    exc->noise_gain_q15     = 0;
+    exc->last_pitch_q16     = -0x7FFFFFFF;
+    exc->last_sh_rate       = -1;
+    exc->pending_phase_lock = 0u;
+    exc->pending_uni_slot   = 0u;
+}
+
+void adrift_exciter_trigger_ex(adrift_exciter_t *exc,
+                               const adrift_exciter_params_t *p,
+                               uint8_t velocity,
+                               bool legato,
+                               uint8_t unison_slot,
+                               bool exc_audible,
+                               bool delayed_onset) {
+    if (legato || p->pluck <= 0) {
+        return;
+    }
+    int32_t pluck = dsp_clamp_i32(p->pluck, 0, 1023);
+    if (!exc_audible) {
+        uint32_t phase_offset   = (uint32_t)unison_slot * 0x24924924u;
+        exc->vco_phase          = phase_offset;
+        exc->sub_phase          = phase_offset >> 1;
+        exc->hf_slew_q15        = 0;
+        exc->ac_cap_q23         = 0;
+        exc->pending_phase_lock = 0u;
+        int32_t exc_lvl_q15     = (int32_t)dsp_udiv_1023((uint32_t)dsp_clamp_i32(p->vco_level, 0, 1023) * 32767u);
+        int32_t mix_1023        = dsp_clamp_i32(p->noise_level, 0, 1023);
+        exc->vco_gain_q15       = (int32_t)dsp_udiv_1023((uint32_t)exc_lvl_q15 * (uint32_t)(1023 - mix_1023));
+        exc->noise_gain_q15     = (int32_t)dsp_udiv_1023((uint32_t)exc_lvl_q15 * (uint32_t)mix_1023);
+    } else if (delayed_onset) {
+        exc->pending_phase_lock = 1u;
+        exc->pending_uni_slot   = unison_slot;
+    } else {
+        exc->pending_phase_lock = 0u;
+    }
+    exc->drift_pitch_q16 = (exc->drift_pitch_q16 * (1023 - pluck)) >> 10;
+    exc->drift_pw_q15    = (exc->drift_pw_q15 * (1023 - pluck)) >> 10;
+
+    /* Velocity-scaled single-cycle mechanical pick/mallet displacement impulse */
+    int32_t vel_scale    = 96 + (((int32_t)(velocity & 0x7Fu) * 160) >> 7); /* 96..256 */
+    exc->impulse_amp_q15 = (pluck * vel_scale) >> 3;                        /* 0..32736 in Q15 */
+    exc->impulse_phase   = 1u;
 }
 
 void adrift_exciter_trigger(adrift_exciter_t *exc,
@@ -54,26 +93,7 @@ void adrift_exciter_trigger(adrift_exciter_t *exc,
                             uint8_t velocity,
                             bool legato,
                             uint8_t unison_slot) {
-    if (legato || p->pluck <= 0) {
-        return;
-    }
-    int32_t pluck = dsp_clamp_i32(p->pluck, 0, 1023);
-    uint32_t phase_offset = (uint32_t)unison_slot * 0x24924924u;
-    exc->vco_phase        = phase_offset;
-    exc->sub_phase        = phase_offset >> 1;
-    exc->hf_slew_q15      = 0;
-    exc->ac_cap_q23       = 0;
-    exc->drift_pitch_q16  = (exc->drift_pitch_q16 * (1023 - pluck)) >> 10;
-    exc->drift_pw_q15     = (exc->drift_pw_q15 * (1023 - pluck)) >> 10;
-    int32_t exc_lvl_q15   = (int32_t)dsp_udiv_1023((uint32_t)dsp_clamp_i32(p->vco_level, 0, 1023) * 32767u);
-    int32_t mix_1023      = dsp_clamp_i32(p->noise_level, 0, 1023);
-    exc->vco_gain_q15     = (int32_t)dsp_udiv_1023((uint32_t)exc_lvl_q15 * (uint32_t)(1023 - mix_1023));
-    exc->noise_gain_q15   = (int32_t)dsp_udiv_1023((uint32_t)exc_lvl_q15 * (uint32_t)mix_1023);
-
-    /* Velocity-scaled single-cycle mechanical pick/mallet displacement impulse */
-    int32_t vel_scale    = 96 + (((int32_t)(velocity & 0x7Fu) * 160) >> 7); /* 96..256 */
-    exc->impulse_amp_q15 = (pluck * vel_scale) >> 3;                        /* 0..32736 in Q15 */
-    exc->impulse_phase   = 1u;
+    adrift_exciter_trigger_ex(exc, p, velocity, legato, unison_slot, false, false);
 }
 
 DSP_ALWAYS_INLINE int32_t polyblep_edge_q15(uint32_t phase_diff, uint32_t dt, uint32_t inv_dt16) {

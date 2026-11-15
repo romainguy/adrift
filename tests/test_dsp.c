@@ -353,7 +353,104 @@ void test_env1_delay_and_loop(void) {
         }
     }
     CHECK(peaks >= 4, "Env 1 A-D Loop mode did not cycle (peaks=%d)", peaks);
-    printf("  -> PASS (Onset Delay exact=%u samples, A-D Loop cycles=%d)\n", expected_delay, peaks);
+
+    /* 2b. Onset-Delay Retrigger De-Click: active envelope ramps smoothly over <=64 samples instead of snapping to 0 */
+    p.loop_mode   = ADRIFT_ENV_LOOP_OFF;
+    p.onset_delay = 0;
+    p.attack      = 0;
+    p.sustain     = 1023;
+    adrift_env_init(&env);
+    adrift_env_note_on(&env, &p, 127u, false);
+    for (int b = 0; b < 8; b++) {
+        adrift_env_process(&env, &p, blk, 64u);
+    }
+    int32_t pre_retrig = blk[63];
+    CHECK(pre_retrig >= 32700, "Expected full sustain before onset-delay retrigger (got %d)", pre_retrig);
+
+    p.onset_delay = 300;
+    adrift_env_note_on(&env, &p, 127u, false);
+    adrift_env_process(&env, &p, blk, 64u);
+    CHECK(blk[0] >= 32000, "Onset-delay retrigger snapped to %d on sample 0 instead of ramping smoothly", blk[0]);
+    int32_t max_declick_step = abs(blk[0] - pre_retrig);
+    for (int i = 1; i < 64; i++) {
+        int32_t stp = abs(blk[i] - blk[i - 1]);
+        if (stp > max_declick_step) max_declick_step = stp;
+    }
+    CHECK(max_declick_step <= 1024, "Onset-delay retrigger step too abrupt (%d Q15)", max_declick_step);
+    adrift_env_process(&env, &p, blk, 64u);
+    CHECK(blk[0] == 0 && blk[63] == 0, "Expected de-click ramp to reach exact silence within 64 samples (got %d, %d)", blk[0], blk[63]);
+
+    /* 2c. Active PWM DC-cap preservation & quietest-releasing-voice stealing */
+    adrift_app_init();
+    adrift_synth_t *s = adrift_app_get_synth();
+    adrift_synth_set_group_voices(s, 0u, 2u);
+    adrift_patch_t *gp0 = &s->groups[0].patch;
+    gp0->dry_wet          = 0;
+    gp0->exc.wave_morph   = 1023;
+    gp0->exc.pulse_width  = 60;
+    gp0->exc.pluck        = 500;
+    gp0->env1.attack      = 0;
+    gp0->env1.sustain     = 800;
+    gp0->env1.release     = 520;
+    gp0->env2.attack      = 0;
+    gp0->env2.sustain     = 1023;
+    gp0->env2.release     = 520;
+    gp0->env2.vel_sens    = 1023;
+
+    int16_t *st_pcm = calloc(16384u * 2u, sizeof(int16_t));
+    adrift_synth_note_on(s, 48u, 127u); /* Loud Note A on voice 0 */
+    render_frames(st_pcm, 12288u);      /* Charge PWM 15 Hz AC-coupling cap */
+    int v_loud = -1;
+    for (int k = 0; k < ADRIFT_MAX_VOICES; k++) {
+        if (s->voices[k].owner_group == 0 && s->voices[k].active && s->voices[k].note == 48u) {
+            v_loud = k;
+            break;
+        }
+    }
+    CHECK(v_loud >= 0 && abs(s->voices[v_loud].exc.ac_cap_q23) > 500000,
+          "Expected active PWM voice AC cap to charge (got %d)", v_loud >= 0 ? s->voices[v_loud].exc.ac_cap_q23 : 0);
+    /* Retriggering same active note with pluck > 0 must NOT zero ac_cap_q23 */
+    adrift_synth_note_on(s, 48u, 127u);
+    CHECK(abs(s->voices[v_loud].exc.ac_cap_q23) > 500000,
+          "Active exciter retrigger abruptly zeroed PWM AC-coupling cap (%d)", s->voices[v_loud].exc.ac_cap_q23);
+
+    adrift_synth_note_on(s, 55u, 12u);  /* Quiet Note B on second voice */
+    render_frames(st_pcm, 1024u);
+    adrift_synth_note_off(s, 48u);
+    adrift_synth_note_off(s, 55u);
+    render_frames(st_pcm, 1024u);       /* Both voices now releasing: Note A is older AND much louder than Note B */
+
+    adrift_synth_note_on(s, 67u, 100u); /* 3rd note must steal quieter Note B, sparing louder older Note A! */
+    CHECK(s->voices[v_loud].note == 48u,
+          "Voice stealer killed louder older releasing voice (note=%u) instead of quieter voice", s->voices[v_loud].note);
+
+    /* Non-legato BBD steal on 1-voice group (C2 -> C5, glide=0): must damp old C2 energy without chirping */
+    adrift_app_init();
+    s = adrift_app_get_synth();
+    adrift_synth_set_group_voices(s, 0u, 1u);
+    gp0 = &s->groups[0].patch;
+    gp0->dry_wet         = 1023;
+    gp0->exc.vco_level   = 900;
+    gp0->exc.noise_level = 1023;
+    gp0->env1.attack     = 0;
+    gp0->env1.decay      = 120;
+    gp0->env1.sustain    = 0;
+    gp0->bbd.feedback    = 885;
+    gp0->bbd.glide       = 0;
+    gp0->env2.attack     = 0;
+    gp0->env2.sustain    = 1023;
+    adrift_synth_note_on(s, 36u, 127u); /* C2 = 65.41 Hz */
+    render_frames(st_pcm, 8192u);
+    adrift_synth_note_on(s, 72u, 127u); /* Steal onto C5 = 523.25 Hz without glide */
+    render_frames(st_pcm, 8192u);
+    double c2_leak = goertzel_mag_db(st_pcm, 2048u, 4096u, 440.0 * pow(2.0, (36.0 - 69.0) / 12.0));
+    double c5_main = goertzel_mag_db(st_pcm, 2048u, 4096u, 440.0 * pow(2.0, (72.0 - 69.0) / 12.0));
+    CHECK((c5_main - c2_leak) > 30.0,
+          "Stolen BBD voice leaked old C2 pitch into C5 (C5=%.1f dB, C2=%.1f dB)", c5_main, c2_leak);
+    free(st_pcm);
+
+    printf("  -> PASS (Onset Delay exact=%u samples, A-D Loop cycles=%d, Retrig declick<=%d)\n",
+           expected_delay, peaks, max_declick_step);
 }
 
 /* ---- 3. Dry Path Post-Input-LPF Invariant ---- */

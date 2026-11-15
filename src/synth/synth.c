@@ -456,8 +456,10 @@ static void render_voice_list(adrift_synth_t *s,
             s->lfo_out_q15 = lfo_q15;
         }
 
-        bool    hold_onset = false;
-        int32_t env1_q15   = 0;
+        bool    hold_onset      = false;
+        bool    onset_fading    = false;
+        bool    onset_fade_done = false;
+        int32_t env1_q15        = 0;
         if (vc->env1.stage != ADRIFT_ENV_IDLE || vp->env1.drone_hold) {
             adrift_env_params_t env1_p = vp->env1;
             env1_p.attack      = (int16_t)dsp_clamp_i32((int32_t)vp->env1.attack      + m.env1_atk, 0, 1023);
@@ -466,8 +468,10 @@ static void render_voice_list(adrift_synth_t *s,
             env1_p.release     = (int16_t)dsp_clamp_i32((int32_t)vp->env1.release     + m.env1_rel, 0, 1023);
             env1_p.onset_delay = (int16_t)dsp_clamp_i32((int32_t)vp->env1.onset_delay + m.env1_dly, 0, 1023);
             adrift_env_update_coefs(&vc->env1, &env1_p);
-            hold_onset = (vc->env1.stage == ADRIFT_ENV_DELAY && vc->env1.delay_rem > frames);
+            hold_onset   = (vc->env1.stage == ADRIFT_ENV_DELAY && vc->env1.delay_rem > frames);
+            onset_fading = hold_onset && (vc->env1.declick_q30 > 0);
             adrift_env_process(&vc->env1, &env1_p, env1_buf, frames);
+            onset_fade_done = onset_fading && (vc->env1.declick_q30 <= 0);
             env1_q15 = (env1_buf[0] + env1_buf[frames - 1u]) >> 1;
         }
 
@@ -555,13 +559,23 @@ static void render_voice_list(adrift_synth_t *s,
             uint32_t saved_vco_ph = vc->exc.vco_phase;
             uint32_t saved_sub_ph = vc->exc.sub_phase;
             uint32_t saved_imp_ph = vc->exc.impulse_phase;
+            if (onset_fading) {
+                vc->exc.impulse_phase = 0u;
+            }
             adrift_exciter_prepare_block_q16(&vc->exc, &slot_exc,
                                              (base_pitch_q8 * 256) + porta_delta_q16, m.vco_pitch_q8,
                                              m.vco_morph, m.vco_pwm, &morph_1023);
             adrift_exciter_process(&vc->exc, &slot_exc, morph_1023, exc_buf, frames);
             if (hold_onset && slot_exc.pluck > 0) {
-                vc->exc.vco_phase     = saved_vco_ph;
-                vc->exc.sub_phase     = saved_sub_ph;
+                if (!onset_fading) {
+                    vc->exc.vco_phase = saved_vco_ph;
+                    vc->exc.sub_phase = saved_sub_ph;
+                } else if (onset_fade_done && vc->exc.pending_phase_lock != 0u) {
+                    uint32_t ph0 = (uint32_t)vc->exc.pending_uni_slot * 0x24924924u;
+                    vc->exc.vco_phase          = ph0;
+                    vc->exc.sub_phase          = ph0 >> 1;
+                    vc->exc.pending_phase_lock = 0u;
+                }
                 vc->exc.impulse_phase = saved_imp_ph;
             }
 
@@ -590,6 +604,9 @@ static void render_voice_list(adrift_synth_t *s,
                     uint32_t w_vco_ph = vw->exc.vco_phase;
                     uint32_t w_sub_ph = vw->exc.sub_phase;
                     uint32_t w_imp_ph = vw->exc.impulse_phase;
+                    if (onset_fading) {
+                        vw->exc.impulse_phase = 0u;
+                    }
                     int32_t  w_pitch_q16 = ((center_pitch_q8 + w_semi_q8 + w_detune_q8) * 256) + porta_delta_q16;
                     vw->bbd.slew_pitch_q16    = w_pitch_q16;
                     vw->bbd.pitch_initialized = true;
@@ -598,8 +615,15 @@ static void render_voice_list(adrift_synth_t *s,
                                                      w_mod.vco_morph, w_mod.vco_pwm, &w_morph);
                     adrift_exciter_process(&vw->exc, &sub_exc, w_morph, wet_buf, frames);
                     if (hold_onset && sub_exc.pluck > 0) {
-                        vw->exc.vco_phase     = w_vco_ph;
-                        vw->exc.sub_phase     = w_sub_ph;
+                        if (!onset_fading) {
+                            vw->exc.vco_phase = w_vco_ph;
+                            vw->exc.sub_phase = w_sub_ph;
+                        } else if (onset_fade_done && vw->exc.pending_phase_lock != 0u) {
+                            uint32_t ph0 = (uint32_t)vw->exc.pending_uni_slot * 0x24924924u;
+                            vw->exc.vco_phase          = ph0;
+                            vw->exc.sub_phase          = ph0 >> 1;
+                            vw->exc.pending_phase_lock = 0u;
+                        }
                         vw->exc.impulse_phase = w_imp_ph;
                     }
                     DSP_CALL_RAM(synth_accum_super_ram)(exc_buf, wet_buf, frames);

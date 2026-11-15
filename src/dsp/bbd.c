@@ -9,8 +9,12 @@ void adrift_bbd_init(adrift_bbd_t *bbd, uint8_t voice_idx) {
     bbd->target_delay_q16  = 168 * 65536;
     bbd->slew_pitch_q16    = (60 << 16);
     bbd->clk_drift_q16     = 0;
-    bbd->prev_fb_q15       = 0;
-    bbd->pitch_initialized = false;
+    bbd->prev_fb_q15        = 0;
+    bbd->pitch_initialized  = false;
+    bbd->delay_initialized  = false;
+    bbd->steal_damp_pending = false;
+    bbd->steal_tail_q15     = 0;
+    bbd->steal_step_q15     = 0;
     adrift_onepole_init(&bbd->fb_lpf);
     adrift_onepole_init(&bbd->aa_lpf);
     adrift_onepole_init(&bbd->clk_lpf);
@@ -41,9 +45,13 @@ void adrift_bbd_reset(adrift_bbd_t *bbd) {
     bbd->disp_x2           = 0;
     bbd->disp_y2           = 0;
     bbd->dc_cap_q23        = 0;
-    bbd->peak_wet_q15      = 0;
-    bbd->pitch_initialized = false;
-    bbd->delay_cache_valid = false;
+    bbd->peak_wet_q15       = 0;
+    bbd->pitch_initialized  = false;
+    bbd->delay_initialized  = false;
+    bbd->steal_damp_pending = false;
+    bbd->steal_tail_q15     = 0;
+    bbd->steal_step_q15     = 0;
+    bbd->delay_cache_valid  = false;
 }
 
 int32_t adrift_bbd_step_glide(adrift_bbd_t *bbd,
@@ -201,8 +209,29 @@ void adrift_bbd_prepare_block_ex(adrift_bbd_t *bbd,
         bbd->target_delay_q16 = dsp_clamp_i32(net_period_q16, min_delay_q16, max_delay_q16);
     }
 
-    if (bbd->delay_q16 < min_delay_q16 || bbd->delay_q16 > max_delay_q16) {
-        bbd->delay_q16 = bbd->target_delay_q16;
+    if (bbd->steal_damp_pending) {
+        bbd->steal_damp_pending = false;
+        bbd->delay_q16          = bbd->target_delay_q16;
+        bbd->delay_initialized  = true;
+        int32_t y_cur           = dsp_bbd_saturate_q15((bbd->clk_lpf.state_q29 + 8192) >> 14);
+        bbd->steal_tail_q15     = y_cur;
+        bbd->steal_step_q15     = (y_cur >= 0) ? (int16_t)((y_cur >> 5) + 1)
+                                               : (int16_t)(-(((-y_cur) >> 5) + 1));
+        for (uint32_t j = 0; j < ADRIFT_BBD_BUF_LEN; j++) {
+            bbd->buf[j] = 0;
+        }
+        adrift_onepole_reset(&bbd->fb_lpf);
+        adrift_onepole_reset(&bbd->aa_lpf);
+        adrift_onepole_reset(&bbd->clk_lpf);
+        bbd->prev_fb_q15 = 0;
+        bbd->disp_x1     = 0;
+        bbd->disp_y1     = 0;
+        bbd->disp_x2     = 0;
+        bbd->disp_y2     = 0;
+        bbd->dc_cap_q23  = 0;
+    } else if (!bbd->delay_initialized || bbd->delay_q16 < min_delay_q16 || bbd->delay_q16 > max_delay_q16) {
+        bbd->delay_q16         = bbd->target_delay_q16;
+        bbd->delay_initialized = true;
     }
 
     /* 5. Feedback VCA Gain:
@@ -409,6 +438,22 @@ void adrift_bbd_process(adrift_bbd_t *bbd,
         DSP_CALL_RAM(bbd_loop_nodisp)(bbd, p->invert, d_step, fb_step, noise_q6, in_q15, wet_out_q15, frames);
     } else {
         DSP_CALL_RAM(bbd_loop_disp)(bbd, p->invert, d_step, fb_step, disp_fm_k, noise_q6, in_q15, wet_out_q15, frames);
+    }
+
+    if (bbd->steal_tail_q15 != 0) {
+        int32_t tail = bbd->steal_tail_q15;
+        int32_t step = bbd->steal_step_q15;
+        for (uint32_t i = 0; i < frames && tail != 0; i++) {
+            wet_out_q15[i] = dsp_sat_q15(wet_out_q15[i] + tail);
+            if (tail > 0) {
+                tail -= step;
+                if (tail < 0) tail = 0;
+            } else {
+                tail -= step;
+                if (tail > 0) tail = 0;
+            }
+        }
+        bbd->steal_tail_q15 = (int16_t)tail;
     }
 
     bbd->delay_q16   = bbd->target_delay_q16;

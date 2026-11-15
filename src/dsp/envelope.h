@@ -43,6 +43,8 @@ typedef struct {
     bool               gate;
     bool               just_triggered;
     int32_t            level_q30;     /* 0 .. (1 << 30) */
+    int32_t            declick_q30;   /* Short C0 fade-down bridge on active retrigger / onset delay */
+    int32_t            declick_step_q30;
     int32_t            vel_scale_q15; /* 0 .. 32767 computed on Note On */
     uint32_t           delay_rem;     /* Remaining samples in ENV_DELAY */
     uint32_t           delay_total;

@@ -57,11 +57,21 @@ typedef struct {
     /* Control-rate caches */
     int32_t  last_pitch_q16;
     int16_t  last_sh_rate;
+    uint8_t  pending_phase_lock;
+    uint8_t  pending_uni_slot;
 } adrift_exciter_t;
 
 void adrift_exciter_init(adrift_exciter_t *exc, uint8_t voice_idx);
 
 /* Note-On trigger: phase-locks VCO/Sub-Osc and arms the mechanical pick/mallet impulse when p->pluck > 0 */
+void adrift_exciter_trigger_ex(adrift_exciter_t *exc,
+                               const adrift_exciter_params_t *p,
+                               uint8_t velocity,
+                               bool legato,
+                               uint8_t unison_slot,
+                               bool exc_audible,
+                               bool delayed_onset);
+
 void adrift_exciter_trigger(adrift_exciter_t *exc,
                             const adrift_exciter_params_t *p,
                             uint8_t velocity,

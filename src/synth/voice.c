@@ -17,11 +17,18 @@ static const int16_t k_stack_detune_q10[ADRIFT_MAX_VOICES] = {
 };
 
 void adrift_synth_reset_voice_dsp(adrift_voice_t *vc) {
-    vc->active          = false;
-    vc->key_down        = false;
-    vc->sustained       = false;
-    vc->pan_cache_valid = false;
-    vc->age             = 0u;
+    vc->active                 = false;
+    vc->key_down               = false;
+    vc->sustained              = false;
+    vc->pan_cache_valid        = false;
+    vc->age                    = 0u;
+    vc->exc.ac_cap_q23         = 0;
+    vc->exc.hf_slew_q15        = 0;
+    vc->exc.vco_gain_q15       = 0;
+    vc->exc.noise_gain_q15     = 0;
+    vc->exc.impulse_phase      = 0u;
+    vc->exc.impulse_amp_q15    = 0;
+    vc->exc.pending_phase_lock = 0u;
     adrift_env_reset(&vc->env1);
     adrift_env_reset(&vc->env2);
     adrift_svf_reset(&vc->in_lpf);
@@ -374,10 +381,38 @@ void adrift_synth_compute_voice_pan_gains_q15(const adrift_group_t *gp,
     adrift_synth_compute_voice_pan_gains_mod_q15(gp, slot, 0, 0, out_pan_l_q15, out_pan_r_q15);
 }
 
-static void trigger_voice_on(adrift_synth_t *s, uint8_t g, uint8_t v, uint8_t note, uint8_t velocity, bool legato) {
+static uint32_t voice_steal_energy(const adrift_voice_t *vc, const adrift_patch_t *p) {
+    uint32_t env2_q15 = p->env2.drone_hold
+                            ? 32767u
+                            : ((((uint32_t)(vc->env2.level_q30 >> 15) * (uint32_t)vc->env2.vel_scale_q15) >> 15) +
+                               (uint32_t)(vc->env2.declick_q30 >> 15));
+    if (env2_q15 > 32767u) env2_q15 = 32767u;
+    uint32_t env1_q15 = p->env1.drone_hold
+                            ? 32767u
+                            : ((((uint32_t)(vc->env1.level_q30 >> 15) * (uint32_t)vc->env1.vel_scale_q15) >> 15) +
+                               (uint32_t)(vc->env1.declick_q30 >> 15));
+    if (env1_q15 > 32767u) env1_q15 = 32767u;
+    uint32_t wet_q15 = (uint32_t)dsp_clamp_i32(vc->bbd.peak_wet_q15, 0, 32767);
+    uint32_t dw      = (uint32_t)dsp_clamp_i32(p->dry_wet, 0, 1023);
+    uint32_t src_q15 = 64u + (((env1_q15 * (1023u - dw)) + (wet_q15 * dw)) >> 10);
+    return (env2_q15 * src_q15) >> 15;
+}
+
+static void trigger_voice_on_ex(adrift_synth_t *s,
+                                uint8_t g,
+                                uint8_t v,
+                                uint8_t note,
+                                uint8_t velocity,
+                                bool legato,
+                                const adrift_voice_t *aud_ref) {
     adrift_voice_t *vc = &s->voices[v];
     adrift_group_t *gp = &s->groups[g];
+    const adrift_voice_t *ref = aud_ref ? aud_ref : vc;
     bool was_active    = vc->active;
+    bool voice_audible = ref->active && (ref->env2.stage != ADRIFT_ENV_IDLE || gp->patch.env2.drone_hold);
+    bool exc_audible   = voice_audible &&
+                         (ref->env1.level_q30 > (1 << 20) || ref->env1.declick_q30 > (1 << 20) || gp->patch.env1.drone_hold);
+    uint8_t prev_note  = vc->note;
 
     /* Polyphonic portamento: when Round-Robin allocates an idle voice with glide > 2,
      * seed its portamento origin from the group's most recently triggered voice (if any). */
@@ -397,6 +432,21 @@ static void trigger_voice_on(adrift_synth_t *s, uint8_t g, uint8_t v, uint8_t no
         }
     }
 
+    if (!voice_audible) {
+        vc->bbd.delay_initialized  = false;
+        vc->bbd.steal_damp_pending = false;
+        vc->exc.ac_cap_q23         = 0;
+        vc->exc.hf_slew_q15        = 0;
+        int32_t exc_lvl_q15        = (int32_t)dsp_udiv_1023((uint32_t)dsp_clamp_i32(gp->patch.exc.vco_level, 0, 1023) * 32767u);
+        int32_t mix_1023           = dsp_clamp_i32(gp->patch.exc.noise_level, 0, 1023);
+        vc->exc.vco_gain_q15       = (int32_t)dsp_udiv_1023((uint32_t)exc_lvl_q15 * (uint32_t)(1023 - mix_1023));
+        vc->exc.noise_gain_q15     = (int32_t)dsp_udiv_1023((uint32_t)exc_lvl_q15 * (uint32_t)mix_1023);
+    } else if (!legato && prev_note != note && gp->patch.bbd.glide <= 2 && !gp->patch.env2.drone_hold) {
+        /* Stealing an active non-drone voice onto a new pitch without glide:
+         * softly release the old BBD tap and start the new string loop cleanly without chirping. */
+        vc->bbd.steal_damp_pending = true;
+    }
+
     vc->active    = true;
     vc->key_down  = true;
     vc->sustained = false;
@@ -407,7 +457,7 @@ static void trigger_voice_on(adrift_synth_t *s, uint8_t g, uint8_t v, uint8_t no
     s->last_note  = note;
     s->any_gate   = true;
 
-    if (!was_active && !legato && (gp->pan != 0 || gp->stereo_spread != 0)) {
+    if (!voice_audible && !legato && (gp->pan != 0 || gp->stereo_spread != 0)) {
         int32_t semi_q8 = 0, detune_q8 = 0, slot_gain_q15 = 32767;
         adrift_synth_compute_stack_slot_voicing(gp, vc->group_slot, adrift_detune_to_q8(gp->unison_detune),
                                                 &semi_q8, &detune_q8, &slot_gain_q15);
@@ -429,7 +479,12 @@ static void trigger_voice_on(adrift_synth_t *s, uint8_t g, uint8_t v, uint8_t no
     uint8_t uni_slot = (gp->assign_mode != ADRIFT_GROUP_ROUND_ROBIN && gp->unison_detune > 0)
                            ? vc->group_slot
                            : 0u;
-    adrift_exciter_trigger(&vc->exc, &gp->patch.exc, velocity, legato, uni_slot);
+    bool delayed_onset = (vc->env1.stage == ADRIFT_ENV_DELAY && vc->env1.delay_total > 0u);
+    adrift_exciter_trigger_ex(&vc->exc, &gp->patch.exc, velocity, legato, uni_slot, exc_audible, delayed_onset);
+}
+
+static void trigger_voice_on(adrift_synth_t *s, uint8_t g, uint8_t v, uint8_t note, uint8_t velocity, bool legato) {
+    trigger_voice_on_ex(s, g, v, note, velocity, legato, (const adrift_voice_t *)0);
 }
 
 static void trigger_voice_off(adrift_synth_t *s, uint8_t g, uint8_t v) {
@@ -510,12 +565,20 @@ void adrift_synth_voice_note_on(adrift_synth_t *s, uint8_t g, uint8_t note, uint
     /* Unison / Super mode (stacks all voices in the group) or 1-voice Mono group */
     if (adrift_group_is_stacked(gp->assign_mode) || n_owned == 1u) {
         bool was_held = (gp->mono_len > 0u);
+        adrift_voice_t super_ref[2];
+        if (gp->assign_mode == ADRIFT_GROUP_SUPER && n_owned > 2u) {
+            super_ref[0] = s->voices[v_list[0]];
+            super_ref[1] = s->voices[v_list[1]];
+        }
         push_group_mono_stack(gp, note, velocity);
         for (uint8_t k = 0; k < n_owned; k++) {
             uint8_t v = v_list[k];
             bool v_was_active = was_held || s->voices[v].sustained ||
                                 (gp->patch.env2.drone_hold && s->voices[v].age > 0u);
-            trigger_voice_on(s, g, v, note, velocity, gp->patch.legato && v_was_active);
+            const adrift_voice_t *ref = (gp->assign_mode == ADRIFT_GROUP_SUPER && n_owned > 2u && k >= 2u)
+                                            ? &super_ref[k & 1u]
+                                            : (const adrift_voice_t *)0;
+            trigger_voice_on_ex(s, g, v, note, velocity, gp->patch.legato && v_was_active, ref);
         }
         return;
     }
@@ -523,7 +586,7 @@ void adrift_synth_voice_note_on(adrift_synth_t *s, uint8_t g, uint8_t note, uint
     /* Round-Robin polyphonic allocation strictly within this group's `n_owned` voices:
      * 1) Reuse voice in group already playing same note (unless droning)
      * 2) Next idle voice in group from `rr_cursor`
-     * 3) Steal oldest releasing voice in group
+     * 3) Steal quietest releasing voice in group (tie-breaking by oldest age)
      * 4) Steal oldest held voice in group
      * 5) Drone Hold fallback within group */
     int chosen_k = -1;
@@ -549,12 +612,17 @@ void adrift_synth_voice_note_on(adrift_synth_t *s, uint8_t g, uint8_t note, uint
             }
         }
         if (chosen_k < 0) {
-            uint32_t best_age = 0xFFFFFFFFu;
+            uint32_t best_energy = 0xFFFFFFFFu;
+            uint32_t best_age    = 0xFFFFFFFFu;
             for (uint8_t k = 0; k < n_owned; k++) {
                 uint8_t v = v_list[k];
-                if (!s->voices[v].key_down && !s->voices[v].sustained && s->voices[v].age < best_age) {
-                    best_age = s->voices[v].age;
-                    chosen_k = (int)k;
+                if (!s->voices[v].key_down && !s->voices[v].sustained) {
+                    uint32_t e = voice_steal_energy(&s->voices[v], &gp->patch);
+                    if (e < best_energy || (e == best_energy && s->voices[v].age < best_age)) {
+                        best_energy = e;
+                        best_age    = s->voices[v].age;
+                        chosen_k    = (int)k;
+                    }
                 }
             }
         }
@@ -587,12 +655,17 @@ void adrift_synth_voice_note_on(adrift_synth_t *s, uint8_t g, uint8_t note, uint
             }
         }
         if (chosen_k < 0) {
-            uint32_t best_age = 0xFFFFFFFFu;
+            uint32_t best_energy = 0xFFFFFFFFu;
+            uint32_t best_age    = 0xFFFFFFFFu;
             for (uint8_t k = 0; k < n_owned; k++) {
                 uint8_t v = v_list[k];
-                if (!s->voices[v].key_down && !s->voices[v].sustained && s->voices[v].age < best_age) {
-                    best_age = s->voices[v].age;
-                    chosen_k = (int)k;
+                if (!s->voices[v].key_down && !s->voices[v].sustained) {
+                    uint32_t e = voice_steal_energy(&s->voices[v], &gp->patch);
+                    if (e < best_energy || (e == best_energy && s->voices[v].age < best_age)) {
+                        best_energy = e;
+                        best_age    = s->voices[v].age;
+                        chosen_k    = (int)k;
+                    }
                 }
             }
         }

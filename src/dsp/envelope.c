@@ -8,11 +8,13 @@ void adrift_env_init(adrift_env_t *env) {
 }
 
 void adrift_env_reset(adrift_env_t *env) {
-    env->stage          = ADRIFT_ENV_IDLE;
-    env->gate           = false;
-    env->just_triggered = false;
-    env->level_q30      = 0;
-    env->vel_scale_q15  = 32767;
+    env->stage            = ADRIFT_ENV_IDLE;
+    env->gate             = false;
+    env->just_triggered   = false;
+    env->level_q30        = 0;
+    env->declick_q30      = 0;
+    env->declick_step_q30 = 0;
+    env->vel_scale_q15    = 32767;
     env->delay_rem      = 0u;
     env->delay_total    = 0u;
     env->atk_coef_q14   = 27443;
@@ -119,12 +121,21 @@ void adrift_env_update_coefs(adrift_env_t *env, const adrift_env_params_t *p) {
 
         if (env->just_triggered && env->gate) {
             if (env->delay_total > 0u) {
+                int32_t cur_out = (env->stage == ADRIFT_ENV_DELAY)
+                                      ? env->declick_q30
+                                      : ((env->level_q30 >> 15) * env->vel_scale_q15);
+                if (cur_out > 0) {
+                    env->declick_q30      = cur_out;
+                    env->declick_step_q30 = (env->delay_total >= 64u) ? ((cur_out >> 6) + 1) : ((cur_out >> 5) + 1);
+                }
                 env->delay_rem = env->delay_total;
                 env->stage     = ADRIFT_ENV_DELAY;
                 env->level_q30 = 0;
             } else if (env->stage == ADRIFT_ENV_DELAY) {
-                env->delay_rem = 0u;
-                env->stage     = ADRIFT_ENV_ATTACK;
+                env->delay_rem        = 0u;
+                env->declick_q30      = 0;
+                env->declick_step_q30 = 0;
+                env->stage            = ADRIFT_ENV_ATTACK;
             }
         } else if (!full && env->stage == ADRIFT_ENV_DELAY && prev_total != env->delay_total) {
             uint32_t elapsed = (prev_total > env->delay_rem) ? (prev_total - env->delay_rem) : 0u;
@@ -163,26 +174,66 @@ void adrift_env_update_coefs(adrift_env_t *env, const adrift_env_params_t *p) {
 }
 
 void adrift_env_note_on(adrift_env_t *env, const adrift_env_params_t *p, uint8_t velocity, bool legato) {
-    adrift_env_update_coefs(env, p);
+    int32_t prev_out_q30 = (env->stage == ADRIFT_ENV_IDLE)
+                               ? 0
+                               : ((env->stage == ADRIFT_ENV_DELAY)
+                                      ? env->declick_q30
+                                      : ((env->level_q30 >> 15) * env->vel_scale_q15) + env->declick_q30);
+    if (prev_out_q30 < 0) prev_out_q30 = 0;
+    if (prev_out_q30 > ENV_ONE_Q30) prev_out_q30 = ENV_ONE_Q30;
 
-    int32_t vsens = dsp_clamp_i32(p->vel_sens, 0, 1023);
-    int32_t v_q15 = (int32_t)dsp_udiv_127((uint32_t)(velocity & 0x7Fu) * 32767u);
-    /* Interpolate between 32767 (vsens=0) and v_q15 (vsens=1023) */
-    env->vel_scale_q15 = 32767 - (((32767 - v_q15) * vsens) >> 10);
+    adrift_env_update_coefs(env, p);
 
     env->gate = true;
     if (legato && env->stage != ADRIFT_ENV_IDLE && env->stage != ADRIFT_ENV_RELEASE) {
         return;
     }
 
+    int32_t vsens       = dsp_clamp_i32(p->vel_sens, 0, 1023);
+    int32_t v_q15       = (int32_t)dsp_udiv_127((uint32_t)(velocity & 0x7Fu) * 32767u);
+    /* Interpolate between 32767 (vsens=0) and v_q15 (vsens=1023) */
+    int32_t new_vel_q15 = 32767 - (((32767 - v_q15) * vsens) >> 10);
+    env->vel_scale_q15  = new_vel_q15;
+
     env->just_triggered = true;
     if (env->delay_total > 0u) {
         env->delay_rem = env->delay_total;
         env->stage     = ADRIFT_ENV_DELAY;
-        /* Reset to 0 during onset delay so delayed strikes emerge cleanly after silence */
         env->level_q30 = 0;
+        /* Ramp any active envelope level smoothly to 0 over <=64 samples instead of clicking */
+        if (prev_out_q30 > 0) {
+            env->declick_q30      = prev_out_q30;
+            env->declick_step_q30 = (env->delay_total >= 64u) ? ((prev_out_q30 >> 6) + 1) : ((prev_out_q30 >> 5) + 1);
+        } else {
+            env->declick_q30      = 0;
+            env->declick_step_q30 = 0;
+        }
     } else {
         env->stage = ADRIFT_ENV_ATTACK;
+        if (prev_out_q30 > 0) {
+            int32_t prev_g15 = prev_out_q30 >> 15;
+            if (new_vel_q15 > 0 && prev_g15 < new_vel_q15) {
+                uint32_t ratio_q15    = (((uint32_t)prev_g15 << 15) + (uint32_t)(new_vel_q15 >> 1)) / (uint32_t)new_vel_q15;
+                if (ratio_q15 > 32767u) ratio_q15 = 32767u;
+                env->level_q30        = (int32_t)(ratio_q15 << 15);
+                env->declick_q30      = 0;
+                env->declick_step_q30 = 0;
+            } else {
+                env->level_q30     = (new_vel_q15 > 0) ? ENV_ONE_Q30 : 0;
+                int32_t excess_q30 = prev_out_q30 - (new_vel_q15 << 15);
+                if (excess_q30 > 0) {
+                    env->declick_q30      = excess_q30;
+                    env->declick_step_q30 = (excess_q30 >> 6) + 1;
+                } else {
+                    env->declick_q30      = 0;
+                    env->declick_step_q30 = 0;
+                }
+            }
+        } else {
+            env->level_q30        = 0;
+            env->declick_q30      = 0;
+            env->declick_step_q30 = 0;
+        }
     }
 }
 
@@ -191,7 +242,14 @@ void adrift_env_note_off(adrift_env_t *env, const adrift_env_params_t *p) {
     env->gate           = false;
     env->just_triggered = false;
     if (env->stage != ADRIFT_ENV_IDLE) {
-        if (env->stage == ADRIFT_ENV_DELAY || env->level_q30 <= 0) {
+        if (env->stage == ADRIFT_ENV_DELAY) {
+            if (env->declick_q30 > 0) {
+                env->delay_rem = 64u;
+            } else {
+                env->level_q30 = 0;
+                env->stage     = ADRIFT_ENV_IDLE;
+            }
+        } else if (env->level_q30 <= 0 && env->declick_q30 <= 0) {
             env->level_q30 = 0;
             env->stage     = ADRIFT_ENV_IDLE;
         } else {
@@ -207,9 +265,11 @@ static DSP_HOT_RAM void env_process_stages_ram(adrift_env_t *env,
     adrift_env_stage_t st = env->stage;
     bool     gate       = env->gate;
     int32_t  vel_q15    = env->vel_scale_q15;
-    int32_t  sus        = env->sus_level_q30;
-    int32_t  lvl        = env->level_q30;
-    uint32_t drem       = env->delay_rem;
+    int32_t  sus          = env->sus_level_q30;
+    int32_t  lvl          = env->level_q30;
+    int32_t  declick      = env->declick_q30;
+    int32_t  declick_step = env->declick_step_q30;
+    uint32_t drem         = env->delay_rem;
     uint32_t dtotal     = env->delay_total;
     int32_t  atk_coef   = env->atk_coef_q14;
     uint32_t atk_shr    = env->atk_shr;
@@ -240,6 +300,12 @@ static DSP_HOT_RAM void env_process_stages_ram(adrift_env_t *env,
             if (lvl <= dec_target) {
                 if (gate && loop != ADRIFT_ENV_LOOP_OFF) {
                     if (loop == ADRIFT_ENV_LOOP_DAD && dtotal > 0u) {
+                        int32_t cur_out = ((lvl >> 15) * vel_q15) + declick;
+                        if (cur_out > ENV_ONE_Q30) cur_out = ENV_ONE_Q30;
+                        if (cur_out > 0) {
+                            declick      = cur_out;
+                            declick_step = (dtotal >= 64u) ? ((cur_out >> 6) + 1) : ((cur_out >> 5) + 1);
+                        }
                         drem = dtotal;
                         lvl  = 0;
                         st   = ADRIFT_ENV_DELAY;
@@ -247,7 +313,7 @@ static DSP_HOT_RAM void env_process_stages_ram(adrift_env_t *env,
                         st = ADRIFT_ENV_ATTACK;
                     }
                 } else {
-                    st = (lvl <= 0 && !gate) ? ADRIFT_ENV_IDLE : ADRIFT_ENV_SUSTAIN;
+                    st = (lvl <= 0 && declick <= 0 && !gate) ? ADRIFT_ENV_IDLE : ADRIFT_ENV_SUSTAIN;
                 }
             }
         } else if (st == ADRIFT_ENV_RELEASE) {
@@ -256,7 +322,9 @@ static DSP_HOT_RAM void env_process_stages_ram(adrift_env_t *env,
             lvl -= step;
             if (lvl <= 0) {
                 lvl = 0;
-                st  = ADRIFT_ENV_IDLE;
+                if (declick <= 0) {
+                    st = ADRIFT_ENV_IDLE;
+                }
             }
         } else if (st == ADRIFT_ENV_ATTACK) {
             int32_t diff_hi = (ENV_OVER_Q30 - lvl) >> 15;
@@ -269,29 +337,42 @@ static DSP_HOT_RAM void env_process_stages_ram(adrift_env_t *env,
         } else if (st == ADRIFT_ENV_SUSTAIN) {
             lvl = sus;
             if (!gate) {
-                st = (lvl <= 0) ? ADRIFT_ENV_IDLE : ADRIFT_ENV_RELEASE;
+                st = (lvl <= 0 && declick <= 0) ? ADRIFT_ENV_IDLE : ADRIFT_ENV_RELEASE;
             } else if (loop != ADRIFT_ENV_LOOP_OFF) {
                 st = ADRIFT_ENV_ATTACK;
             }
         } else if (st == ADRIFT_ENV_DELAY) {
             lvl = 0;
-            if (drem > 0u) {
-                drem--;
-            }
-            if (drem == 0u) {
-                st = ADRIFT_ENV_ATTACK;
+            if (!gate && declick <= 0) {
+                drem = 0u;
+                st   = ADRIFT_ENV_IDLE;
+            } else {
+                if (drem > 0u) {
+                    drem--;
+                }
+                if (drem == 0u) {
+                    st = gate ? ADRIFT_ENV_ATTACK : ADRIFT_ENV_IDLE;
+                }
             }
         } else {
             lvl = 0;
         }
 
-        int32_t g_q15 = lvl >> 15;
-        out_gain_q15[i] = (g_q15 * vel_q15) >> 15;
+        int32_t g_q15 = ((lvl >> 15) * vel_q15) >> 15;
+        if (declick > 0) {
+            g_q15 += (declick >> 15);
+            if (g_q15 > 32767) g_q15 = 32767;
+            declick -= declick_step;
+            if (declick < 0) declick = 0;
+        }
+        out_gain_q15[i] = g_q15;
     }
 
-    env->stage     = st;
-    env->level_q30 = lvl;
-    env->delay_rem = drem;
+    env->stage            = st;
+    env->level_q30        = lvl;
+    env->declick_q30      = declick;
+    env->declick_step_q30 = declick_step;
+    env->delay_rem        = drem;
 }
 
 void adrift_env_process(adrift_env_t *env,
@@ -300,7 +381,8 @@ void adrift_env_process(adrift_env_t *env,
                         uint32_t frames) {
     env->just_triggered = false;
     if (p->drone_hold) {
-        env->level_q30 = ENV_ONE_Q30;
+        env->level_q30   = ENV_ONE_Q30;
+        env->declick_q30 = 0;
         for (uint32_t i = 0; i < frames; i++) {
             out_gain_q15[i] = 32767;
         }
@@ -309,7 +391,8 @@ void adrift_env_process(adrift_env_t *env,
 
     adrift_env_stage_t st = env->stage;
     if (st == ADRIFT_ENV_IDLE) {
-        env->level_q30 = 0;
+        env->level_q30   = 0;
+        env->declick_q30 = 0;
         for (uint32_t i = 0; i < frames; i++) {
             out_gain_q15[i] = 0;
         }
@@ -317,7 +400,7 @@ void adrift_env_process(adrift_env_t *env,
     }
 
     uint32_t drem = env->delay_rem;
-    if (st == ADRIFT_ENV_DELAY && drem > frames) {
+    if (st == ADRIFT_ENV_DELAY && drem > frames && env->declick_q30 <= 0) {
         env->level_q30 = 0;
         env->delay_rem = drem - frames;
         for (uint32_t i = 0; i < frames; i++) {
@@ -327,7 +410,7 @@ void adrift_env_process(adrift_env_t *env,
     }
 
     uint8_t loop = p->loop_mode;
-    if (st == ADRIFT_ENV_SUSTAIN && env->gate && loop == ADRIFT_ENV_LOOP_OFF) {
+    if (st == ADRIFT_ENV_SUSTAIN && env->gate && loop == ADRIFT_ENV_LOOP_OFF && env->declick_q30 <= 0) {
         int32_t sus     = env->sus_level_q30;
         env->level_q30  = sus;
         int32_t const_g = ((sus >> 15) * env->vel_scale_q15) >> 15;

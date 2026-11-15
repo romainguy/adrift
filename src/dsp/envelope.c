@@ -15,35 +15,56 @@ void adrift_env_reset(adrift_env_t *env) {
     env->vel_scale_q15  = 32767;
     env->delay_rem      = 0u;
     env->delay_total    = 0u;
-    env->atk_coef_q14   = 4096 << 4;
+    env->atk_coef_q14   = 27443;
+    env->atk_shr        = 3u;
     env->atk_floor_q30  = 1 << 20;
-    env->dec_coef_q14   = 512 << 4;
+    env->dec_coef_q14   = 24985;
+    env->dec_shr        = 8u;
     env->dec_floor_q30  = 1 << 16;
     env->sus_level_q30  = ENV_ONE_Q30 >> 1;
-    env->rel_coef_q14   = 512 << 4;
+    env->rel_coef_q14   = 24985;
+    env->rel_shr        = 8u;
     env->rel_floor_q30  = 1 << 16;
     env->coefs_valid    = false;
 }
 
-/* Maps knob 0..1023 -> sample count [min_samples .. max_samples] with cubic musical taper */
-static uint32_t knob_to_samples(int16_t knob_1023, uint32_t min_s, uint32_t max_s) {
+/* Maps knob 0..1023 -> sample count [min_samples .. max_samples] with musical taper.
+ * When extend_top is true (NORM / LONG), preserves exact percussive response at low/mid knobs
+ * while smoothly scaling the upper throw so RC completion time matches 5 s / 10 s / 25 s. */
+static uint32_t knob_to_samples(int16_t knob_1023, uint32_t min_s, uint32_t max_s, bool extend_top) {
     uint32_t k  = (uint32_t)dsp_clamp_i32(knob_1023, 0, 1023);
     uint32_t k2 = (k * k) >> 10;          /* 0..1022 */
-    uint32_t k3 = (k2 * k) >> 10;         /* 0..1021 (cubic curve gives fine resolution at 0.5-100 ms) */
+    uint32_t k3 = (k2 * k) >> 10;         /* 0..1021 */
+    uint32_t taper_q16;
+    if (extend_top) {
+        uint32_t w_q10 = 365u + ((659u * k2) >> 10); /* 0.356 at k=0 .. 1.000 at k=1023 */
+        taper_q16 = (k3 * w_q10) >> 4;
+    } else {
+        taper_q16 = k3 << 6;
+    }
     uint32_t span = max_s - min_s;
-    return min_s + dsp_umul_q16(span, k3 << 6);
+    return min_s + dsp_umul_q16(span, taper_q16);
 }
 
-static void samples_to_rc_rate(uint32_t samples, int32_t *out_coef_q14, int32_t *out_floor_q30) {
+/* Compute normalized 15-bit mantissa + shift RC rate (tau = samples / 3, floor = 1 / samples)
+ * so every stage from 0.5 ms to 25 s retains continuous analog RC exponential curvature
+ * without zeroing the RC coefficient above 1.11 seconds. */
+static void samples_to_rc_rate(uint32_t samples,
+                               int32_t *out_coef,
+                               uint8_t *out_shr,
+                               int32_t *out_floor_q30) {
     if (samples < 8u) samples = 8u;
-    /* Time constant tau ~= samples / 3 so RC curve settles cleanly within `samples` */
-    uint32_t tau = samples / 3u;
-    if (tau < 1u) tau = 1u;
-    uint32_t c = (tau <= 16384u) ? (262144u / tau) : 0u;
-    if (c > 196608u) c = 196608u;
-    *out_coef_q14 = (int32_t)c;
+    uint32_t pre_sh = (samples >= 1024u) ? 6u : 0u;
+    uint32_t q      = dsp_div_u32_q16(98304u << pre_sh, samples);
+    uint8_t  shr    = (uint8_t)(16u + pre_sh);
+    while (q > 32768u && shr > 0u) {
+        q >>= 1;
+        shr--;
+    }
+    if (q < 1u) q = 1u;
+    *out_coef = (int32_t)q;
+    *out_shr  = shr;
 
-    /* Bias current floor guarantees exact termination within `samples` even when c == 0 */
     uint32_t flr = (uint32_t)ENV_ONE_Q30 / samples;
     if (flr < 64u) flr = 64u;
     *out_floor_q30 = (int32_t)flr;
@@ -61,23 +82,26 @@ void adrift_env_update_coefs(adrift_env_t *env, const adrift_env_params_t *p) {
         return;
     }
 
-    /* Stage time bounds @ 44.118 kHz:
-     *   NORM  (0): Attack 0.5 ms (22) .. 5 s (220,590), Decay/Release 1 ms (44) .. 10 s (441,180)
-     *   SHORT (1): Attack/Decay/Release ~0.5 ms (16..22) .. ~250 ms per stage
-     *   LONG  (2): Attack/Decay/Release ~1 ms (44) .. 25 s (1,102,950) per stage
+    /* Stage completion bounds @ 44.118 kHz (RC completion time T_atk ~= 0.356 * S):
+     *   NORM  (0): Attack 0.5 ms .. 5 s, Decay/Release 1 ms .. 10 s
+     *   SHORT (1): Attack/Decay/Release ~0.5 ms .. ~250 ms per stage
+     *   LONG  (2): Attack/Decay/Release ~1 ms .. 25 s per stage
      */
-    uint32_t atk_min = 22u, atk_max = 220590u;
-    uint32_t dec_min = 44u, dec_max = 441180u;
+    uint32_t atk_min = 22u, atk_max = 618800u;
+    uint32_t dec_min = 44u, dec_max = 1237600u;
+    bool     ext_top = true;
     if (p->range == ADRIFT_ENV_RANGE_SHORT) {
         atk_min = 16u;
         atk_max = 30940u;
         dec_min = 22u;
         dec_max = 30940u;
+        ext_top = false;
     } else if (p->range == ADRIFT_ENV_RANGE_LONG) {
         atk_min = 44u;
-        atk_max = 1102950u;
+        atk_max = 3094000u;
         dec_min = 44u;
-        dec_max = 1102950u;
+        dec_max = 3094000u;
+        ext_top = true;
     }
 
     if (full || env->last_onset_delay != p->onset_delay) {
@@ -110,14 +134,14 @@ void adrift_env_update_coefs(adrift_env_t *env, const adrift_env_params_t *p) {
     env->just_triggered = false;
 
     if (full || env->last_attack != p->attack) {
-        uint32_t atk_s = knob_to_samples(p->attack, atk_min, atk_max);
-        samples_to_rc_rate(atk_s, &env->atk_coef_q14, &env->atk_floor_q30);
+        uint32_t atk_s = knob_to_samples(p->attack, atk_min, atk_max, ext_top);
+        samples_to_rc_rate(atk_s, &env->atk_coef_q14, &env->atk_shr, &env->atk_floor_q30);
         env->last_attack = p->attack;
     }
 
     if (full || env->last_decay != p->decay) {
-        uint32_t dec_s = knob_to_samples(p->decay, dec_min, dec_max);
-        samples_to_rc_rate(dec_s, &env->dec_coef_q14, &env->dec_floor_q30);
+        uint32_t dec_s = knob_to_samples(p->decay, dec_min, dec_max, ext_top);
+        samples_to_rc_rate(dec_s, &env->dec_coef_q14, &env->dec_shr, &env->dec_floor_q30);
         env->last_decay = p->decay;
     }
 
@@ -129,8 +153,8 @@ void adrift_env_update_coefs(adrift_env_t *env, const adrift_env_params_t *p) {
     }
 
     if (full || env->last_release != p->release) {
-        uint32_t rel_s = knob_to_samples(p->release, dec_min, dec_max);
-        samples_to_rc_rate(rel_s, &env->rel_coef_q14, &env->rel_floor_q30);
+        uint32_t rel_s = knob_to_samples(p->release, dec_min, dec_max, ext_top);
+        samples_to_rc_rate(rel_s, &env->rel_coef_q14, &env->rel_shr, &env->rel_floor_q30);
         env->last_release = p->release;
     }
 
@@ -188,10 +212,13 @@ static DSP_HOT_RAM void env_process_stages_ram(adrift_env_t *env,
     uint32_t drem       = env->delay_rem;
     uint32_t dtotal     = env->delay_total;
     int32_t  atk_coef   = env->atk_coef_q14;
+    uint32_t atk_shr    = env->atk_shr;
     int32_t  atk_floor  = env->atk_floor_q30;
     int32_t  dec_coef   = env->dec_coef_q14;
+    uint32_t dec_shr    = env->dec_shr;
     int32_t  dec_floor  = env->dec_floor_q30;
     int32_t  rel_coef   = env->rel_coef_q14;
+    uint32_t rel_shr    = env->rel_shr;
     int32_t  rel_floor  = env->rel_floor_q30;
     int32_t  dec_target = (loop != ADRIFT_ENV_LOOP_OFF && sus > (ENV_ONE_Q30 - (1 << 24)))
                               ? 0 /* If sustain is ~100% and loop enabled, still cycle to 0 */
@@ -200,8 +227,8 @@ static DSP_HOT_RAM void env_process_stages_ram(adrift_env_t *env,
     for (uint32_t i = 0; i < frames; i++) {
         if (st == ADRIFT_ENV_DECAY) {
             if (lvl > dec_target) {
-                int32_t diff_hi = (lvl - dec_target) >> 18;
-                int32_t step    = (diff_hi * dec_coef) + dec_floor;
+                int32_t diff_hi = (lvl - dec_target) >> 15;
+                int32_t step    = ((diff_hi * dec_coef) >> dec_shr) + dec_floor;
                 lvl -= step;
                 if (lvl <= dec_target) {
                     lvl = dec_target;
@@ -224,16 +251,16 @@ static DSP_HOT_RAM void env_process_stages_ram(adrift_env_t *env,
                 }
             }
         } else if (st == ADRIFT_ENV_RELEASE) {
-            int32_t diff_hi = lvl >> 18;
-            int32_t step    = (diff_hi * rel_coef) + rel_floor;
+            int32_t diff_hi = lvl >> 15;
+            int32_t step    = ((diff_hi * rel_coef) >> rel_shr) + rel_floor;
             lvl -= step;
             if (lvl <= 0) {
                 lvl = 0;
                 st  = ADRIFT_ENV_IDLE;
             }
         } else if (st == ADRIFT_ENV_ATTACK) {
-            int32_t diff_hi = (ENV_OVER_Q30 - lvl) >> 18;
-            int32_t step    = (diff_hi * atk_coef) + atk_floor;
+            int32_t diff_hi = (ENV_OVER_Q30 - lvl) >> 15;
+            int32_t step    = ((diff_hi * atk_coef) >> atk_shr) + atk_floor;
             lvl += step;
             if (lvl >= ENV_ONE_Q30) {
                 lvl = ENV_ONE_Q30;

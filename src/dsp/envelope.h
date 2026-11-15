@@ -53,6 +53,9 @@ typedef struct {
     int32_t            sus_level_q30;
     int32_t            rel_coef_q14;
     int32_t            rel_floor_q30;
+    uint8_t            atk_shr;
+    uint8_t            dec_shr;
+    uint8_t            rel_shr;
     int16_t            last_onset_delay;
     int16_t            last_attack;
     int16_t            last_decay;

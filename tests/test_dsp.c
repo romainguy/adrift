@@ -1184,6 +1184,45 @@ void test_env1_range(void) {
     CHECK(long_s > 24.0 && long_s < 26.0,
           "Expected LONG max attack ~25.0 s, got %.2f s (%u samples)", long_s, atk_long);
 
+    /* Verify slow NORM (5 s) and LONG (25 s) envelopes retain true analog RC exponential curvature
+     * (attack midpoint > 62% of full scale; decay midpoint < 30% of full scale, vs 50% linear). */
+    {
+        adrift_env_t env_rc;
+        adrift_env_params_t prc = {
+            .onset_delay = 0, .attack = 1023, .decay = 1023, .sustain = 0, .release = 1023,
+            .vel_sens = 0, .loop_mode = ADRIFT_ENV_LOOP_OFF, .range = ADRIFT_ENV_RANGE_LONG,
+            .drone_hold = false
+        };
+        adrift_env_init(&env_rc);
+        adrift_env_note_on(&env_rc, &prc, 127u, false);
+        int32_t blk[64];
+        uint32_t half_atk = (atk_long / 2u) & ~63u;
+        for (uint32_t s_cnt = 0u; s_cnt < half_atk; s_cnt += 64u) {
+            adrift_env_process(&env_rc, &prc, blk, 64u);
+        }
+        double atk_mid_norm = (double)blk[63] / 32767.0;
+        CHECK(atk_mid_norm > 0.58 && atk_mid_norm < 0.72,
+              "25s LONG attack fell back to linear ramp (midpoint=%.3f, expected RC ~0.63)", atk_mid_norm);
+
+        while (env_rc.stage == ADRIFT_ENV_ATTACK) {
+            adrift_env_process(&env_rc, &prc, blk, 64u);
+        }
+        /* Measure total decay samples and verify midpoint is strictly convex (< 38% vs 50% linear) */
+        adrift_env_t env_dec_cnt = env_rc;
+        uint32_t dec_long = 0u;
+        while (env_dec_cnt.stage == ADRIFT_ENV_DECAY && dec_long < 2000000u) {
+            adrift_env_process(&env_dec_cnt, &prc, blk, 64u);
+            dec_long += 64u;
+        }
+        uint32_t half_dec = (dec_long / 2u) & ~63u;
+        for (uint32_t s_cnt = 0u; s_cnt < half_dec; s_cnt += 64u) {
+            adrift_env_process(&env_rc, &prc, blk, 64u);
+        }
+        double dec_mid_norm = (double)blk[63] / 32767.0;
+        CHECK(dec_mid_norm > 0.25 && dec_mid_norm < 0.40,
+              "25s LONG decay fell back to linear ramp (midpoint=%.3f, expected RC ~0.33)", dec_mid_norm);
+    }
+
     /* 15b. Verify Decay & Release scale with range while Onset Delay stays 0-2 s */
     adrift_env_t env_s, env_l;
     adrift_env_params_t ps = {

@@ -13,8 +13,12 @@ typedef struct {
     int32_t a1_q28;
     int32_t a2_q28;
     int32_t a3_q28;
+    int32_t cur_a1_q28;
+    int32_t cur_a2_q28;
+    int32_t cur_a3_q28;
     int16_t last_cutoff;
     int16_t last_res;
+    uint8_t coefs_snapped;
 } adrift_svf_lpf12_t;
 
 void adrift_svf_init(adrift_svf_lpf12_t *f);

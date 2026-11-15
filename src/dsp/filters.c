@@ -7,15 +7,25 @@
 #endif
 
 void adrift_svf_init(adrift_svf_lpf12_t *f) {
-    f->last_cutoff = -1;
-    f->last_res    = -1;
+    f->last_cutoff   = -1;
+    f->last_res      = -1;
+    f->a1_q28        = 0;
+    f->a2_q28        = 0;
+    f->a3_q28        = 0;
+    f->cur_a1_q28    = 0;
+    f->cur_a2_q28    = 0;
+    f->cur_a3_q28    = 0;
+    f->coefs_snapped = 0u;
     adrift_svf_reset(f);
     adrift_svf_set_params(f, 1023, 0);
+    /* Allow first real patch set_params after init to snap immediately */
+    f->coefs_snapped = 0u;
 }
 
 void adrift_svf_reset(adrift_svf_lpf12_t *f) {
-    f->ic1eq_q20 = 0;
-    f->ic2eq_q20 = 0;
+    f->ic1eq_q20     = 0;
+    f->ic2eq_q20     = 0;
+    f->coefs_snapped = 0u;
 }
 
 static FILT_NOINLINE void svf_compute_a123(uint32_t g_q16,
@@ -48,6 +58,12 @@ void adrift_svf_set_params(adrift_svf_lpf12_t *f, int32_t cutoff_1023, int32_t r
     int32_t c = dsp_clamp_i32(cutoff_1023, 0, 1023);
     int32_t r = dsp_clamp_i32(res_1023, 0, 1023);
     if (f->last_cutoff == (int16_t)c && f->last_res == (int16_t)r) {
+        if (!f->coefs_snapped) {
+            f->cur_a1_q28    = f->a1_q28;
+            f->cur_a2_q28    = f->a2_q28;
+            f->cur_a3_q28    = f->a3_q28;
+            f->coefs_snapped = 1u;
+        }
         return;
     }
     f->last_cutoff = (int16_t)c;
@@ -56,6 +72,12 @@ void adrift_svf_set_params(adrift_svf_lpf12_t *f, int32_t cutoff_1023, int32_t r
     /* k = 2.0 - 1.88 * (r / 1023) -> Q in [0.5 .. 8.3] */
     uint32_t k_q16 = 131072u - (((uint32_t)r * 123207u) >> 10);
     svf_compute_a123(g_q16, k_q16, &f->a1_q28, &f->a2_q28, &f->a3_q28);
+    if (!f->coefs_snapped) {
+        f->cur_a1_q28    = f->a1_q28;
+        f->cur_a2_q28    = f->a2_q28;
+        f->cur_a3_q28    = f->a3_q28;
+        f->coefs_snapped = 1u;
+    }
 }
 
 /* Exact 32-bit split Q28 product `((int64_t)a * (int64_t)x) >> 28` with zero 64-bit multiplies
@@ -64,43 +86,114 @@ DSP_ALWAYS_INLINE int32_t svf_mul_q28_split(int32_t a_hi, int32_t a_lo, int32_t 
     return (x_hi * a_hi) + (((x_hi * a_lo) + (x_lo * a_hi) + ((x_lo * a_lo) >> 14)) >> 14);
 }
 
+/* Analog OTA bandpass feedback soft limiter in Q20:
+ * Bit-exact 1:1 linear up to +-917504 (+-28672 Q15, so Q=0.5 passband/stopband is untouched),
+ * C3-smoothly compressing extreme resonant peaks toward +-1572864 (+-1.5x full scale). */
+DSP_ALWAYS_INLINE int32_t svf_soft_v1_q20(int32_t v1) {
+    v1 = dsp_clamp_i32(v1, -(1 << 27), (1 << 27));
+    int32_t mag = (v1 >= 0) ? v1 : -v1;
+    if (mag <= 917504)  return v1;
+    if (mag >= 3538944) return (v1 >= 0) ? 1572864 : -1572864;
+    int32_t d8  = (mag - 917504) >> 8;     /* 0 .. 10240 */
+    int32_t u   = (d8 * 104858) >> 15;     /* 0 .. 32768 */
+    if (u > 32768) u = 32768;
+    int32_t om  = 32768 - u;
+    int32_t om2 = (om * om) >> 15;
+    int32_t om4 = (om2 * om2) >> 15;
+    int32_t out = 917504 + ((10240 * (32768 - om4)) >> 9);
+    return (v1 >= 0) ? out : -out;
+}
+
+/* Smooth C3 soft-knee lowpass output saturator in Q15:
+ * Bit-exact 1:1 linear up to +-26624 (-1.8 dBFS), softly rounding resonant peaks into +-32767. */
+DSP_ALWAYS_INLINE int32_t svf_soft_out_q15(int32_t x) {
+    int32_t mag = (x >= 0) ? x : -x;
+    if (mag <= 26624) return x;
+    if (mag >= 51200) return (x >= 0) ? 32767 : -32767;
+    int32_t u   = ((mag - 26624) * 43691) >> 15; /* 0 .. 32768 */
+    if (u > 32768) u = 32768;
+    int32_t om  = 32768 - u;
+    int32_t om2 = (om * om) >> 15;
+    int32_t om4 = (om2 * om2) >> 15;
+    int32_t out = 26624 + (((6143 * (32768 - om4)) + 16384) >> 15);
+    if (out > 32767) out = 32767;
+    return (x >= 0) ? out : -out;
+}
+
 static DSP_HOT_RAM void svf_process_lpf_ram(adrift_svf_lpf12_t *f,
+                                            int32_t da1,
+                                            int32_t da2,
+                                            int32_t da3,
                                             const int32_t *in_q15,
                                             int32_t *out_q15,
                                             uint32_t frames) {
-    int32_t ic1   = f->ic1eq_q20;
-    int32_t ic2   = f->ic2eq_q20;
-    int32_t a1    = f->a1_q28;
-    int32_t a2    = f->a2_q28;
-    int32_t a3    = f->a3_q28;
-    int32_t a1_hi = a1 >> 14;
-    int32_t a1_lo = a1 & 0x3FFF;
-    int32_t a2_hi = a2 >> 14;
-    int32_t a2_lo = a2 & 0x3FFF;
-    int32_t a3_hi = a3 >> 14;
-    int32_t a3_lo = a3 & 0x3FFF;
+    int32_t ic1 = f->ic1eq_q20;
+    int32_t ic2 = f->ic2eq_q20;
+    int32_t a1  = f->cur_a1_q28;
+    int32_t a2  = f->cur_a2_q28;
+    int32_t a3  = f->cur_a3_q28;
 
-    for (uint32_t i = 0; i < frames; i++) {
-        int32_t v0     = in_q15[i] * 32; /* Q15 -> Q20 (UBSan-safe signed scale) */
-        int32_t v3     = v0 - ic2;
-        int32_t ic1_hi = ic1 >> 14;
-        int32_t ic1_lo = ic1 & 0x3FFF;
-        int32_t v3_hi  = v3 >> 14;
-        int32_t v3_lo  = v3 & 0x3FFF;
+    if (da1 == 0 && da2 == 0 && da3 == 0) {
+        int32_t a1_hi = a1 >> 14;
+        int32_t a1_lo = a1 & 0x3FFF;
+        int32_t a2_hi = a2 >> 14;
+        int32_t a2_lo = a2 & 0x3FFF;
+        int32_t a3_hi = a3 >> 14;
+        int32_t a3_lo = a3 & 0x3FFF;
 
-        int32_t v1 = svf_mul_q28_split(a1_hi, a1_lo, ic1_hi, ic1_lo) +
-                     svf_mul_q28_split(a2_hi, a2_lo, v3_hi,  v3_lo);
-        int32_t v2 = ic2 +
-                     svf_mul_q28_split(a2_hi, a2_lo, ic1_hi, ic1_lo) +
-                     svf_mul_q28_split(a3_hi, a3_lo, v3_hi,  v3_lo);
+        for (uint32_t i = 0; i < frames; i++) {
+            int32_t v0     = in_q15[i] * 32; /* Q15 -> Q20 (UBSan-safe signed scale) */
+            int32_t v3     = v0 - ic2;
+            int32_t ic1_hi = ic1 >> 14;
+            int32_t ic1_lo = ic1 & 0x3FFF;
+            int32_t v3_hi  = v3 >> 14;
+            int32_t v3_lo  = v3 & 0x3FFF;
 
-        /* Mild analog integrator clamping at +-8x full scale prevents state blowup under extreme Q */
-        v1 = dsp_clamp_i32(v1, -(1 << 27), (1 << 27));
-        v2 = dsp_clamp_i32(v2, -(1 << 27), (1 << 27));
+            int32_t v1 = svf_mul_q28_split(a1_hi, a1_lo, ic1_hi, ic1_lo) +
+                         svf_mul_q28_split(a2_hi, a2_lo, v3_hi,  v3_lo);
+            int32_t v2 = ic2 +
+                         svf_mul_q28_split(a2_hi, a2_lo, ic1_hi, ic1_lo) +
+                         svf_mul_q28_split(a3_hi, a3_lo, v3_hi,  v3_lo);
 
-        ic1 = (v1 * 2) - ic1;
-        ic2 = (v2 * 2) - ic2;
-        out_q15[i] = dsp_sat_q15(v2 >> 5);
+            v1 = svf_soft_v1_q20(v1);
+            v2 = dsp_clamp_i32(v2, -(1 << 27), (1 << 27));
+
+            ic1 = (v1 * 2) - ic1;
+            ic2 = (v2 * 2) - ic2;
+            out_q15[i] = svf_soft_out_q15(v2 >> 5);
+        }
+    } else {
+        for (uint32_t i = 0; i < frames; i++) {
+            a1 += da1;
+            a2 += da2;
+            a3 += da3;
+            int32_t a1_hi = a1 >> 14;
+            int32_t a1_lo = a1 & 0x3FFF;
+            int32_t a2_hi = a2 >> 14;
+            int32_t a2_lo = a2 & 0x3FFF;
+            int32_t a3_hi = a3 >> 14;
+            int32_t a3_lo = a3 & 0x3FFF;
+
+            int32_t v0     = in_q15[i] * 32;
+            int32_t v3     = v0 - ic2;
+            int32_t ic1_hi = ic1 >> 14;
+            int32_t ic1_lo = ic1 & 0x3FFF;
+            int32_t v3_hi  = v3 >> 14;
+            int32_t v3_lo  = v3 & 0x3FFF;
+
+            int32_t v1 = svf_mul_q28_split(a1_hi, a1_lo, ic1_hi, ic1_lo) +
+                         svf_mul_q28_split(a2_hi, a2_lo, v3_hi,  v3_lo);
+            int32_t v2 = ic2 +
+                         svf_mul_q28_split(a2_hi, a2_lo, ic1_hi, ic1_lo) +
+                         svf_mul_q28_split(a3_hi, a3_lo, v3_hi,  v3_lo);
+
+            v1 = svf_soft_v1_q20(v1);
+            v2 = dsp_clamp_i32(v2, -(1 << 27), (1 << 27));
+
+            ic1 = (v1 * 2) - ic1;
+            ic2 = (v2 * 2) - ic2;
+            out_q15[i] = svf_soft_out_q15(v2 >> 5);
+        }
     }
 
     f->ic1eq_q20 = ic1;
@@ -108,7 +201,19 @@ static DSP_HOT_RAM void svf_process_lpf_ram(adrift_svf_lpf12_t *f,
 }
 
 void adrift_svf_process_lpf(adrift_svf_lpf12_t *f, const int32_t *in_q15, int32_t *out_q15, uint32_t frames) {
-    DSP_CALL_RAM(svf_process_lpf_ram)(f, in_q15, out_q15, frames);
+    if (frames == 0u) {
+        f->cur_a1_q28 = f->a1_q28;
+        f->cur_a2_q28 = f->a2_q28;
+        f->cur_a3_q28 = f->a3_q28;
+        return;
+    }
+    int32_t da1 = dsp_div_frames_i32(f->a1_q28 - f->cur_a1_q28, frames);
+    int32_t da2 = dsp_div_frames_i32(f->a2_q28 - f->cur_a2_q28, frames);
+    int32_t da3 = dsp_div_frames_i32(f->a3_q28 - f->cur_a3_q28, frames);
+    DSP_CALL_RAM(svf_process_lpf_ram)(f, da1, da2, da3, in_q15, out_q15, frames);
+    f->cur_a1_q28 = f->a1_q28;
+    f->cur_a2_q28 = f->a2_q28;
+    f->cur_a3_q28 = f->a3_q28;
 }
 
 void adrift_onepole_init(adrift_onepole_lpf6_t *f) {

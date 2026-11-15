@@ -553,9 +553,62 @@ void test_dry_path_post_input_lpf(void) {
     CHECK((hf_open - hf_closed) > 30.0,
           "Dry path 8 kHz not attenuated by Input LPF (open=%.1f dB, closed=%.1f dB)",
           hf_open, hf_closed);
+
+    /* 3b. Input TPT SVF soft resonance saturation & per-sample coefficient sweep smoothness */
+    adrift_svf_lpf12_t svf;
+    adrift_svf_init(&svf);
+    /* Cutoff ~ 880 Hz (log2(880 / 32.703) / log2(21000 / 32.703) * 1023 ≈ 521), high Q (res = 1000) */
+    adrift_svf_set_params(&svf, 521, 1000);
+    int32_t *svf_in  = calloc(4096u, sizeof(int32_t));
+    int32_t *svf_out = calloc(4096u, sizeof(int32_t));
+    for (uint32_t i = 0; i < 4096u; i++) {
+        svf_in[i] = (int32_t)llround(16000.0 * sin(2.0 * M_PI * 880.0 * (double)i / FS_EXACT));
+    }
+    for (uint32_t base = 0; base < 4096u; base += 64u) {
+        adrift_svf_process_lpf(&svf, &svf_in[base], &svf_out[base], 64u);
+    }
+    for (uint32_t i = 0; i < 4096u; i++) {
+        pcm[2u * i]      = dsp_sat16(svf_out[i]);
+        pcm[2u * i + 1u] = pcm[2u * i];
+    }
+    double res_h1_db = goertzel_mag_db(pcm, 2048u, 2048u, 880.0);
+    double res_h7_db = goertzel_mag_db(pcm, 2048u, 2048u, 880.0 * 7.0);
+    double res_h11_db= goertzel_mag_db(pcm, 2048u, 2048u, 880.0 * 11.0);
+    CHECK((res_h7_db - res_h1_db) < -44.0 && (res_h11_db - res_h1_db) < -50.0,
+          "Resonant SVF overdrive produced harsh odd-harmonic clipping (H7=%.1f dBc, H11=%.1f dBc)",
+          res_h7_db - res_h1_db, res_h11_db - res_h1_db);
+
+    /* Fast high-Q cutoff sweep across 64 blocks: block boundaries must match interior smoothness */
+    adrift_svf_reset(&svf);
+    for (uint32_t i = 0; i < 4096u; i++) {
+        svf_in[i] = (int32_t)llround(12000.0 * sin(2.0 * M_PI * 220.0 * (double)i / FS_EXACT));
+    }
+    adrift_svf_set_params(&svf, 360, 960);
+    for (uint32_t blk = 0; blk < 64u; blk++) {
+        adrift_svf_set_params(&svf, 360 + (int32_t)(blk * 5u), 960);
+        adrift_svf_process_lpf(&svf, &svf_in[blk * 64u], &svf_out[blk * 64u], 64u);
+    }
+    double bnd_d2_sum = 0.0, intr_d2_sum = 0.0;
+    int bnd_cnt = 0, intr_cnt = 0;
+    for (uint32_t i = 66u; i < 4095u; i++) {
+        double d2 = fabs((double)svf_out[i + 1u] - 2.0 * (double)svf_out[i] + (double)svf_out[i - 1u]);
+        if ((i & 63u) == 63u || (i & 63u) == 0u) {
+            bnd_d2_sum += d2;
+            bnd_cnt++;
+        } else {
+            intr_d2_sum += d2;
+            intr_cnt++;
+        }
+    }
+    double bnd_ratio = (bnd_d2_sum / (double)bnd_cnt) / ((intr_d2_sum / (double)intr_cnt) + 1e-6);
+    CHECK(bnd_ratio < 1.05,
+          "High-Q SVF cutoff sweep exhibited 64-sample block-boundary zipper spikes (ratio=%.3f)", bnd_ratio);
+
+    free(svf_in);
+    free(svf_out);
     free(pcm);
-    printf("  -> PASS (Dry path 8 kHz attenuated by %.1f dB when Input LPF closed)\n",
-           hf_open - hf_closed);
+    printf("  -> PASS (Dry path 8 kHz atten=%.1f dB, SVF res H7=%.1f dBc, sweep ratio=%.3f)\n",
+           hf_open - hf_closed, res_h7_db - res_h1_db, bnd_ratio);
 }
 
 /* ---- 4. BBD Resonator Pitch Tracking (< 5 cents C2-C5) & Invert Mode ---- */

@@ -129,23 +129,26 @@ DSP_ALWAYS_INLINE int32_t dsp_mul_q14(int32_t a, int32_t b) {
     return (a * b) >> 14;
 }
 
-/* Analog BBD MOSFET bucket-well soft saturator (asymmetric rational cubic in Q15):
- * Positive peaks saturate smoothly to +28672 (L+ = 43008), negative peaks to -30720 (L- = 46080),
- * modeling asymmetric bucket charge depletion while preserving exact f(0) = 0 and f'(0) = 1. */
+/* Analog BBD MOSFET bucket-well soft saturator (C1-continuous linear-core cubic in Q15):
+ * 1:1 bit-exact linear up to -12 dBFS (+8192 / -8704) so normal plucks decay naturally without
+ * per-pass dynamic compression, then smoothly saturating to +21504 / -22528 analog charge-well rails. */
 DSP_ALWAYS_INLINE int16_t dsp_bbd_saturate_q15(int32_t x) {
     if (x >= 0) {
-        if (x >= 43008) return 28672;
-        int32_t u_q15    = (x * 24966) >> 15;
+        if (x <= 8192) return (int16_t)x;
+        if (x >= 28160) return 21504;
+        int32_t d        = x - 8192;
+        int32_t u_q15    = (d * 53773) >> 15;
         int32_t u2_q15   = (u_q15 * u_q15) >> 15;
         int32_t gain_q15 = 32768 - ((u2_q15 * 10923) >> 15);
-        return (int16_t)(((x * gain_q15) + 16384) >> 15);
+        return (int16_t)(8192 + (((d * gain_q15) + 16384) >> 15));
     } else {
-        if (x <= -46080) return -30720;
-        int32_t ax       = -x;
-        int32_t u_q15    = (ax * 23302) >> 15;
+        if (x >= -8704) return (int16_t)x;
+        if (x <= -29440) return -22528;
+        int32_t d        = (-x) - 8704;
+        int32_t u_q15    = (d * 51781) >> 15;
         int32_t u2_q15   = (u_q15 * u_q15) >> 15;
         int32_t gain_q15 = 32768 - ((u2_q15 * 10923) >> 15);
-        return (int16_t)(-(((ax * gain_q15) + 16384) >> 15));
+        return (int16_t)(-(8704 + (((d * gain_q15) + 16384) >> 15)));
     }
 }
 

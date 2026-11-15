@@ -797,6 +797,50 @@ void test_self_oscillation_and_env2_gate(void) {
     CHECK(gated_rms < -96.0,
           "Post-BBD Env 2 failed to gate self-oscillating tail to silence (rms=%.1f dBFS)", gated_rms);
 
+    /* 5b. Linear-core bucket-well saturator: normal plucks (< -12 dBFS) decay linearly without double compression */
+    CHECK(dsp_bbd_saturate_q15(8000) == 8000 && dsp_bbd_saturate_q15(-8500) == -8500,
+          "Expected linear core in dsp_bbd_saturate_q15");
+    {
+        double decay_db[2] = { 0.0, 0.0 };
+        for (int loud = 0; loud < 2; loud++) {
+            adrift_bbd_t bbd_lin;
+            adrift_bbd_init(&bbd_lin, 0u);
+            adrift_bbd_params_t lp = {
+                .feedback      = 885,
+                .fb_lpf_cutoff = 920,
+                .glide         = 0,
+                .invert        = false,
+                .bbd_noise     = 0,
+                .dispersion    = 0
+            };
+            int32_t dummy_fb = 0;
+            adrift_bbd_prepare_block(&bbd_lin, &lp, 60 << 8, 0, 0, 0, 64u, &dummy_fb);
+            bbd_lin.fb_gain_q14 = dummy_fb;
+
+            double amp = loud ? 7800.0 : 1950.0; /* -12.5 dBFS vs -24.5 dBFS */
+            int32_t in_b[8192], wet_b[8192];
+            for (uint32_t n = 0; n < 8192u; n++) {
+                in_b[n] = (n < 168u) ? (int32_t)(amp * sin(2.0 * M_PI * 261.625565 * (double)n / (double)ADRIFT_SAMPLE_RATE)) : 0;
+            }
+            for (uint32_t base = 0; base < 8192u; base += 64u) {
+                adrift_bbd_prepare_block(&bbd_lin, &lp, 60 << 8, 0, 0, 0, 64u, &dummy_fb);
+                adrift_bbd_process(&bbd_lin, &lp, dummy_fb, in_b + base, wet_b + base, 64u);
+            }
+            int16_t st_b[8192 * 2];
+            for (uint32_t n = 0; n < 8192u; n++) {
+                int16_t s16 = (int16_t)dsp_clamp_i32(wet_b[n], -32768, 32767);
+                st_b[n * 2u]      = s16;
+                st_b[n * 2u + 1u] = s16;
+            }
+            double e_rms = compute_rms_dbfs(st_b, 512u,  1024u);
+            double l_rms = compute_rms_dbfs(st_b, 6656u, 1024u);
+            decay_db[loud] = e_rms - l_rms;
+        }
+        CHECK(fabs(decay_db[1] - decay_db[0]) < 0.25,
+              "Normal pluck decay compressed nonlinearly (-9.5 dBFS decay=%.2f dB vs -21.5 dBFS decay=%.2f dB)",
+              decay_db[1], decay_db[0]);
+    }
+
     free(pcm);
     printf("  -> PASS (Self-Osc settled=%.1f dBFS, Post-Env2 Release=%.1f dBFS)\n",
            osc_rms, gated_rms);

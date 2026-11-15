@@ -213,7 +213,7 @@ void adrift_bbd_prepare_block_ex(adrift_bbd_t *bbd,
         bbd->steal_damp_pending = false;
         bbd->delay_q16          = bbd->target_delay_q16;
         bbd->delay_initialized  = true;
-        int32_t y_cur           = dsp_bbd_saturate_q15((bbd->clk_lpf.state_q29 + 8192) >> 14);
+        int32_t y_cur           = dsp_sat_q15((bbd->clk_lpf.state_q29 + 8192) >> 14);
         bbd->steal_tail_q15     = y_cur;
         bbd->steal_step_q15     = (y_cur >= 0) ? (int16_t)((y_cur >> 5) + 1)
                                                : (int16_t)(-(((-y_cur) >> 5) + 1));
@@ -308,9 +308,9 @@ DSP_ALWAYS_INLINE void bbd_loop_impl(adrift_bbd_t *bbd,
         int32_t x_in = in_q15[i];
 
         /* 1. 1024-stage MOSFET bucket-capacitance C(V) dispersion + HF-equalized 4-point Lagrange read */
-        int32_t disp_q16 = (prev_fb * (cur_d >> 16)) >> 9;
+        int32_t disp_q16 = (prev_fb * (cur_d >> 12)) >> 13;
         if (use_disp) {
-            disp_q16 += (x_in * disp_fm_k) >> 3;
+            disp_q16 += (x_in * disp_fm_k) >> 7;
         }
         int32_t  eff_d = dsp_clamp_i32(cur_d + disp_q16, min_delay_q16, max_delay_q16);
         uint32_t d_int = (uint32_t)(eff_d >> 16);
@@ -343,9 +343,9 @@ DSP_ALWAYS_INLINE void bbd_loop_impl(adrift_bbd_t *bbd,
         int32_t d4_corr = (d4 * k_d4 + 32768) >> 16;
         delayed -= d4_corr;
 
-        /* 2. 1024-stage BBD output reconstruction/CTI filter + bucket-well soft saturator */
+        /* 2. 1024-stage BBD output reconstruction/CTI filter (saturator acts once at bucket-well write) */
         int32_t clk_filtered = bbd_onepole_step(&clk_st, clk_a, delayed);
-        int32_t companded    = (int32_t)dsp_bbd_saturate_q15(clk_filtered);
+        int32_t companded    = dsp_sat_q15(clk_filtered);
         wet_out_q15[i]       = companded;
 
         int32_t abs_w = companded < 0 ? -companded : companded;
@@ -370,7 +370,7 @@ DSP_ALWAYS_INLINE void bbd_loop_impl(adrift_bbd_t *bbd,
         int32_t fb_q16    = fb_damped * 2;
         int32_t fb_ac_q16 = fb_q16 - (dc_cap >> 14);
         dc_cap += fb_ac_q16;
-        int32_t fb_ac     = (fb_ac_q16 + 1) >> 1;
+        int32_t fb_ac     = dsp_sat_q15((fb_ac_q16 + 1) >> 1);
         prev_fb           = fb_ac;
 
         /* 4. Feedback VCA (0..115% in Q14) & Polarity Invert (+1 / -1) */
@@ -443,7 +443,7 @@ void adrift_bbd_process(adrift_bbd_t *bbd,
     int32_t cur_d     = bbd->delay_q16;
     int32_t d_step    = dsp_div_frames_i32(bbd->target_delay_q16 - cur_d, frames);
     int32_t fb_step   = dsp_div_frames_i32(target_fb_q14 - bbd->fb_gain_q14, frames);
-    int32_t disp_fm_k = (dsp_clamp_i32(p->dispersion, 0, 1023) * (cur_d >> 16)) >> 13;
+    int32_t disp_fm_k = (dsp_clamp_i32(p->dispersion, 0, 1023) * (cur_d >> 12)) >> 13;
     int32_t noise_q6  = dsp_clamp_i32(p->bbd_noise, 0, 1023); /* 0..1023 -> 0..16 LSB unbiased */
 
     if (bbd->disp_r_q15 == 0u && disp_fm_k == 0) {

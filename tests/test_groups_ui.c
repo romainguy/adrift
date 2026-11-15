@@ -837,6 +837,63 @@ void test_voice_groups_and_save_menu(const char *wav_dir) {
     adrift_synth_render_block(s, pcm, 512u, NULL, 0u);
     CHECK(compute_rms_dbfs(pcm, 0u, 512u) > -30.0, "SUPER BASS retrigger produced silence");
     adrift_synth_all_notes_off(s, true);
+
+    /* Verify P20 16V MONSTER (index 19): Redshift 6 16-voice UNISON Demon Core swarm,
+     * symmetric L/R octave + fundamental stack (12x 0 ST, 2x -12 ST, 2x +12 ST, no fifths/-24 ST),
+     * centered Left/Right fundamental detune, free-running VCOs, 3 active LFOs, and rich stereo output */
+    adrift_synth_load_preset(s, 19u);
+    CHECK(s->preset_index == 19u && strcmp(s->preset_name, "16V MONSTER") == 0 &&
+          s->groups[0].num_voices == 16u && s->groups[0].assign_mode == ADRIFT_GROUP_UNISON &&
+          s->groups[0].stereo_spread > 0 &&
+          adrift_detune_to_cents(s->groups[0].unison_detune) >= 20 &&
+          adrift_detune_to_cents(s->groups[0].unison_detune) <= 36 &&
+          s->groups[0].patch.exc.pluck == 0 && s->groups[0].patch.exc.vco_octave == 0 &&
+          s->groups[0].patch.lfo_depth != 0 && s->groups[0].patch.lfo2_depth != 0 &&
+          s->groups[0].patch.lfo3_depth != 0 && adrift_fx_is_active(&s->fx_params),
+          "P20 16V MONSTER preset configuration mismatch (nv=%u, mode=%u, det=%dc, pluck=%d)",
+          s->groups[0].num_voices, s->groups[0].assign_mode,
+          (int)adrift_detune_to_cents(s->groups[0].unison_detune), s->groups[0].patch.exc.pluck);
+
+    adrift_midi_msg_t p20_on = { 0x90u, 57u, 112u, 0u }; /* A3 = 220 Hz */
+    adrift_headless_render(pcm, N, &p20_on, 1u);
+    uint32_t cnt_sub = 0u, cnt_fund = 0u, cnt_up = 0u;
+    double   sum_cents_l = 0.0, sum_cents_r = 0.0;
+    double   ref_inc_a3  = (double)dsp_pitch_to_phase_inc(57 << 8);
+    for (uint8_t k = 0u; k < 16u; k++) {
+        CHECK(s->voices[k].active && s->voices[k].owner_group == 0 && s->voices[k].group_slot == k,
+              "P20 voice %u not active in G1 slot %u", k, k);
+        double cents = 1200.0 * log2((double)s->voices[k].exc.vco_inc / ref_inc_a3);
+        if (k == 2u || k == 3u) {
+            CHECK(fabs(cents + 1200.0) < 40.0, "P20 slot %u expected -12 ST sub, got %.1f cents", k, cents);
+            cnt_sub++;
+        } else if (k == 6u || k == 7u) {
+            CHECK(fabs(cents - 1200.0) < 45.0, "P20 slot %u expected +12 ST upper, got %.1f cents", k, cents);
+            cnt_up++;
+        } else {
+            CHECK(fabs(cents) < 45.0, "P20 slot %u expected 0 ST fundamental, got %.1f cents", k, cents);
+            if ((k & 1u) == 0u) sum_cents_l += cents;
+            else                sum_cents_r += cents;
+            cnt_fund++;
+        }
+    }
+    CHECK(cnt_fund == 12u && cnt_sub == 2u && cnt_up == 2u &&
+          fabs(sum_cents_l / 6.0) < 4.0 && fabs(sum_cents_r / 6.0) < 4.0,
+          "P20 16-voice stack pitch balance mismatch (fund=%u, sub=%u, up=%u, meanL=%.2fc, meanR=%.2fc)",
+          cnt_fund, cnt_sub, cnt_up, sum_cents_l / 6.0, sum_cents_r / 6.0);
+
+    double p20_rms_l = compute_rms_dbfs(pcm, 4096u, N - 4096u);
+    double p20_rms_r = compute_rms_dbfs(pcm + 1, 4096u, N - 4096u);
+    bool   p20_stereo = false;
+    for (uint32_t i = 4096u; i < N; i++) {
+        if (pcm[2u * i] != pcm[2u * i + 1u]) {
+            p20_stereo = true;
+            break;
+        }
+    }
+    CHECK(p20_rms_l > -16.0 && p20_rms_r > -16.0 && fabs(p20_rms_l - p20_rms_r) < 2.5 && p20_stereo,
+          "P20 16V MONSTER stereo output imbalance or silence (L=%.2f dBFS, R=%.2f dBFS, stereo=%d)",
+          p20_rms_l, p20_rms_r, (int)p20_stereo);
+    adrift_synth_all_notes_off(s, true);
     adrift_synth_load_preset(s, 0u);
 
     /* 8g. Scale Browser UI (ALGORITHM encoder open/scroll/wrap, KNOB1 root, OCT- cancel, OCT+ apply, white-key mapping) */

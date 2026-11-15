@@ -8,12 +8,12 @@ const int32_t k_unison_gain_q15[ADRIFT_MAX_VOICES + 1] = {
 
 /* Asymmetric, center-weighted Demon Core detune ratios in Q10 (-1024..+1024).
  * Even slots (0,2,4..) feed Left/CPU0 and odd slots (1,3,5..) feed Right/CPU1;
- * consecutive L/R pairs alternate detune polarity (-/+, +/-, -/+, +/-) so BOTH
- * the Left and Right channels stay pitch-centered at 0c even at +-120c max spread,
- * while coprime magnitudes prevent any two oscillator pairs from beating in sync. */
+ * both the 6 fundamental (0 ST) pairs and the 2 octave (-12/+12 ST) pairs alternate
+ * polarity (-/+, +/-) with distinct magnitudes so Left and Right stay centered at 0.0c
+ * while no two oscillator pairs ever beat at the same rate. */
 static const int16_t k_stack_detune_q10[ADRIFT_MAX_VOICES] = {
-    -240,  +260,  +520,  -490,  -820, +1024,  +380,  -410,
-    -680,  +710,  +190,  -210,  -940,  +910,  +610,  -640
+    -185,  +195,  +510,  -490,  +415,  -400,  -740,  +765,
+    -645,  +670,  +310,  -325,  -855,  +830,  +995, -1024
 };
 
 void adrift_synth_reset_voice_dsp(adrift_voice_t *vc) {
@@ -212,34 +212,28 @@ void adrift_synth_compute_stack_slot_voicing(const adrift_group_t *gp,
         }
         detune_q8 = (spread_q8 * ratio_q10) >> 10;
 
-        /* Demon Core harmonic interval & octave stacking across the voice stack:
+        /* Demon Core octave-enriched unison stacking across the voice stack (100% L/R symmetric):
          * - Slots 0, 1: 0 ST Core Fundamental L/R pair (1.00x gain)
-         * - Slot 2 (for N>=4) and Slot 3 (for N>=6): -12 ST Sub-Octave foundation (0.80x gain, tighter detune)
-         * - Slot 5 (for N=6,7) or Slots 6, 7 (for N>=8): +12 ST Upper-Octave shimmer (0.65x gain)
-         * - Slots 10, 11 (for N>=12): +7 ST Perfect Fifth harmonic body (0.58x gain)
-         * - Slot 14 (for N=16): -24 ST Deep Sub-Octave (0.55x gain)
-         * - Slot 15 (for N=16): +19 ST Twelfth / Octave+Fifth crown (0.55x gain) */
+         * - Slot 2 (for N>=4) and Slot 3 (for N>=6): -12 ST Sub-Octave foundation (tighter detune)
+         * - Slot 5 (for N=6,7) or Slots 6, 7 (for N>=8): +12 ST Upper-Octave brilliance
+         * - Slots 4, 5, 8..15 (for N>=12): 0 ST center-weighted Demon Core unison swarm
+         *   (0.90x inner/mid swarm on slots 4..11, 0.82x wide stereo wings on slots 12..15) */
         if (nv >= 4u) {
             if (slot == 2u || (slot == 3u && nv >= 6u)) {
                 semi_q8       = -(12 << 8);
-                slot_gain_q15 = 26214; /* 0.80 */
-                detune_q8     = (detune_q8 * 580) >> 10;
+                slot_gain_q15 = (nv >= 12u) ? 23593 : 26214; /* 0.72x for 12..16v swarm, 0.80x for <=11v */
+                detune_q8     = (detune_q8 * ((nv >= 12u) ? 480 : 580)) >> 10;
             } else if ((slot == 5u && nv < 8u && nv >= 6u) ||
                        ((slot == 6u || slot == 7u) && nv >= 8u)) {
                 semi_q8       = +(12 << 8);
-                slot_gain_q15 = 21299; /* 0.65 */
-            } else if ((slot == 10u || slot == 11u) && nv >= 12u) {
-                semi_q8       = +(7 << 8);
-                slot_gain_q15 = 19005; /* 0.58 */
-            } else if (slot == 14u && nv >= 16u) {
-                semi_q8       = -(24 << 8);
-                slot_gain_q15 = 18022; /* 0.55 */
-                detune_q8     = (detune_q8 * 480) >> 10;
-            } else if (slot == 15u && nv >= 16u) {
-                semi_q8       = +(19 << 8);
-                slot_gain_q15 = 18022; /* 0.55 */
+                slot_gain_q15 = (nv >= 12u) ? 17695 : 21299; /* 0.54x for 12..16v swarm, 0.65x for <=11v */
+                if (nv >= 12u) {
+                    detune_q8 = (detune_q8 * 780) >> 10;
+                }
+            } else if (nv >= 12u && slot >= 12u) {
+                slot_gain_q15 = 26869; /* 0.82x wide outer unison wings */
             } else if (slot >= 4u) {
-                slot_gain_q15 = 28835; /* 0.88 outer unison fundamentals */
+                slot_gain_q15 = (nv >= 12u) ? 29491 : 28835; /* 0.90x / 0.88x unison swarm fundamentals */
             }
         }
     }

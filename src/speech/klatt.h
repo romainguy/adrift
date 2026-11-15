@@ -10,8 +10,8 @@
  * ("Software for a cascade/parallel formant synthesizer", JASA 67(3), 971-995).
  *
  * Synthesizes speech internally at 11,029.5 Hz (ADRIFT_SAMPLE_RATE / 4) and
- * upsamples 4x with linear interpolation + 2-pole Butterworth anti-imaging
- * filtering to Adrift's native 44,118 Hz output sample rate.
+ * upsamples 4x with linear interpolation + 4-pole cascaded Butterworth
+ * anti-imaging filtering to Adrift's native 44,118 Hz output sample rate.
  *
  * 100% freestanding C99, zero floating-point, zero 64-bit integer math.
  */
@@ -95,12 +95,26 @@ typedef struct {
     int32_t  amp_a5;
     int32_t  amp_a6;
     int32_t  amp_ab;
+    int32_t  tgt_av;
+    int32_t  tgt_avs;
+    int32_t  tgt_ah;
+    int32_t  tgt_af;
+    int32_t  av_q8;
+    int32_t  avs_q8;
+    int32_t  ah_q8;
+    int32_t  af_q8;
+    int32_t  step_av_q8;
+    int32_t  step_avs_q8;
+    int32_t  step_ah_q8;
+    int32_t  step_af_q8;
     uint16_t cur_f0_hz10;
+    uint16_t last_f0_hz10;
     uint8_t  cur_sw_par;
+    uint8_t  ramp_rem;
     uint8_t  speed; /* 1..5, default 3 */
     uint16_t frame_rem;
 
-    /* 4x upsampler (11,029.5 Hz -> 44,118 Hz) + 2-pole Butterworth anti-imaging LPF */
+    /* 4x upsampler (11,029.5 Hz -> 44,118 Hz) + 4-pole Butterworth anti-imaging LPF */
     uint8_t  up_phase;
     uint16_t tail_rem;
     int32_t  prev_raw;
@@ -109,6 +123,10 @@ typedef struct {
     int32_t  up_x2;
     int32_t  up_y1;
     int32_t  up_y2;
+    int32_t  up2_x1;
+    int32_t  up2_x2;
+    int32_t  up2_y1;
+    int32_t  up2_y2;
     int32_t  dc_x1;
     int32_t  dc_y1;
 

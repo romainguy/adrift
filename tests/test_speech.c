@@ -115,9 +115,13 @@ static void test_klatt_formant_dsp(void) {
     double iy_f1_lo = goertzel_mag_db(stereo, 1024u, 4096u, 242.4);
     double iy_f1_hi = goertzel_mag_db(stereo, 1024u, 4096u, 727.3);
     double iy_f2    = goertzel_mag_db(stereo, 1024u, 4096u, 2303.0);
+    double iy_img   = goertzel_mag_db(stereo, 1024u, 4096u, (double)ADRIFT_SAMPLE_RATE / 4.0 - 2303.0);
     CHECK(iy_f1_lo > iy_f1_hi + 8.0 && iy_f2 > aa_f2 + 6.0,
           "Expected /IY/ F1(242)=%.1f > 727=%.1f and F2(2303)=%.1f > /AA/(2303)=%.1f",
           iy_f1_lo, iy_f1_hi, iy_f2, aa_f2);
+    CHECK(iy_f2 > iy_img + 30.0,
+          "Expected 4-pole anti-imaging LPF to suppress 8.73 kHz F2 mirror image (%.1f dB) > 30 dB below F2 (%.1f dB)",
+          iy_img, iy_f2);
     double hf_vowel = calc_hf_diff_ratio_db(stereo, 1024u, 4096u);
 
     /* Parallel fricative /S/: unvoiced high-frequency noise */
@@ -140,6 +144,26 @@ static void test_klatt_formant_dsp(void) {
     double hf_fric = calc_hf_diff_ratio_db(stereo, 1024u, 4096u);
     CHECK(hf_fric > hf_vowel + 6.0,
           "Expected /S/ fricative HF ratio (%.1f dB) > voiced vowel (%.1f dB)", hf_fric, hf_vowel);
+
+    /* Abrupt voiced /AA/ -> unvoiced /S/ -> silence phoneme transitions must ramp cleanly without clicks */
+    adrift_klatt_reset(&kl);
+    adrift_klatt_frame_t f_sil;
+    memset(&f_sil, 0, sizeof(f_sil));
+    f_sil.f1 = 500u; f_sil.f2 = 1500u; f_sil.f3 = 2500u;
+    f_sil.b1 = 90u;  f_sil.b2 = 120u;  f_sil.b3 = 160u;
+    f_sil.fnz = 270u; f_sil.dur_mul = 16u;
+    for (int i = 0; i < 8; i++) (void)adrift_klatt_push_frame(&kl, &f_aa);
+    for (int i = 0; i < 8; i++) (void)adrift_klatt_push_frame(&kl, &f_ss);
+    for (int i = 0; i < 8; i++) (void)adrift_klatt_push_frame(&kl, &f_sil);
+    (void)adrift_klatt_render(&kl, mono, 6000u);
+    int32_t max_trans_step = 0;
+    for (uint32_t i = 1u; i < 6000u; i++) {
+        int32_t d = (int32_t)mono[i] - (int32_t)mono[i - 1u];
+        if (d < 0) d = -d;
+        if (d > max_trans_step) max_trans_step = d;
+    }
+    CHECK(max_trans_step < 6000,
+          "Expected smooth phoneme-boundary source gain ramping (< 6000 LSB/sample), got %d", max_trans_step);
 
     /* Speed 1..5 duration monotonicity */
     uint32_t dur[6] = {0};
@@ -189,6 +213,52 @@ static void test_speech_audio_isolation(void) {
           "adrift_app_audio_block (USB/synth out) MUST remain 100%% bit-exact with speech active");
     CHECK(memcmp(usb_pcm, line_pcm, sizeof(usb_pcm)) != 0,
           "adrift_app_mix_line_out MUST mix synthesized speech into line-out/headphone buffer");
+
+    /* Verify C1 soft-knee headphone limiter prevents brick-wall flat-topping on loud synth + loud speech (S16 & Q23) */
+    adrift_screen_reader_t *sr = adrift_app_get_screen_reader();
+    adrift_klatt_reset(&sr->klatt);
+    sr->duck_gain_q14 = 16384u; /* Start un-ducked so initial crest hits maximum combined amplitude */
+    adrift_klatt_frame_t loud_v;
+    memset(&loud_v, 0, sizeof(loud_v));
+    loud_v.f0_hz10 = 1250u;
+    loud_v.f1 = 730u; loud_v.b1 = 65u;
+    loud_v.f2 = 1090u; loud_v.b2 = 90u;
+    loud_v.f3 = 2440u; loud_v.b3 = 130u;
+    loud_v.fnz = 270u; loud_v.av = 66u; loud_v.dur_mul = 16u;
+    for (int i = 0; i < 20; i++) (void)adrift_klatt_push_frame(&sr->klatt, &loud_v);
+
+    int16_t hot_s16[512u * 2u];
+    int32_t hot_q23[512u * 2u];
+    for (uint32_t i = 0u; i < 512u; i++) {
+        int32_t sv = (int32_t)llround(32000.0 * sin(2.0 * M_PI * 440.0 * (double)i / (double)ADRIFT_SAMPLE_RATE));
+        hot_s16[2u * i]      = (int16_t)sv;
+        hot_s16[2u * i + 1u] = (int16_t)sv;
+        hot_q23[2u * i]      = sv * 256;
+        hot_q23[2u * i + 1u] = sv * 256;
+    }
+    adrift_sr_mix_line_out_scaled(sr, hot_s16, 512u, 32767);
+
+    adrift_klatt_reset(&sr->klatt);
+    sr->duck_gain_q14 = 16384u;
+    for (int i = 0; i < 20; i++) (void)adrift_klatt_push_frame(&sr->klatt, &loud_v);
+    adrift_sr_mix_line_out_scaled_q23(sr, hot_q23, 512u, 32767);
+
+    uint32_t rail_s16 = 0u, rail_q23 = 0u;
+    int32_t  pk_s16 = 0, pk_q23 = 0;
+    for (uint32_t i = 0u; i < 512u; i++) {
+        int32_t a16 = hot_s16[2u * i] < 0 ? -(int32_t)hot_s16[2u * i] : (int32_t)hot_s16[2u * i];
+        int32_t a23 = hot_q23[2u * i] < 0 ? -hot_q23[2u * i] : hot_q23[2u * i];
+        if (a16 > pk_s16) pk_s16 = a16;
+        if (a23 > pk_q23) pk_q23 = a23;
+        if (a16 >= 32767) rail_s16++;
+        if (a23 >= 8388607) rail_q23++;
+    }
+    CHECK(pk_s16 > 24576 && pk_s16 < 32767 && rail_s16 == 0u,
+          "Expected S16 headphone soft-knee limiter to compress loud crest smoothly below rail (pk=%d, rail=%u)",
+          pk_s16, (unsigned)rail_s16);
+    CHECK(pk_q23 > 6291456 && pk_q23 < 8388607 && rail_q23 == 0u,
+          "Expected Q23 headphone soft-knee limiter to compress loud crest smoothly below rail (pk=%d, rail=%u)",
+          pk_q23, (unsigned)rail_q23);
 }
 
 static void test_speech_black_key_chords_and_rules(void) {

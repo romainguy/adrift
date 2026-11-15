@@ -218,9 +218,10 @@ void adrift_klatt_reset(adrift_klatt_t *k) {
     }
     uint8_t saved_speed = (k->speed >= 1u && k->speed <= 5u) ? k->speed : 3u;
     zero_bytes(k, sizeof(*k));
-    k->rng   = 0x6D2B79F5u;
-    k->t0    = 88u;
-    k->speed = saved_speed;
+    k->rng          = 0x6D2B79F5u;
+    k->t0           = 88u;
+    k->last_f0_hz10 = 1200u;
+    k->speed        = saved_speed;
 
     /* Fixed source & upper cascade/parallel resonators (Klatt 1980 Table I) */
     res_set_pole(&k->rgp, 0,    100);
@@ -312,13 +313,42 @@ bool adrift_klatt_push_frame(adrift_klatt_t *k, const adrift_klatt_frame_t *fr) 
     return true;
 }
 
+static void set_source_gain_targets(adrift_klatt_t *k,
+                                    int32_t av,
+                                    int32_t avs,
+                                    int32_t ah,
+                                    int32_t af,
+                                    uint32_t nsmp) {
+    k->tgt_av  = av;
+    k->tgt_avs = avs;
+    k->tgt_ah  = ah;
+    k->tgt_af  = af;
+    if (av == k->amp_av && avs == k->amp_avs && ah == k->amp_ah && af == k->amp_af) {
+        k->av_q8    = av * 256;
+        k->avs_q8   = avs * 256;
+        k->ah_q8    = ah * 256;
+        k->af_q8    = af * 256;
+        k->ramp_rem = 0u;
+        return;
+    }
+    uint8_t rlen   = 8u;
+    int32_t mul    = 32; /* 256 / 8: exact 8-sample (0.73 ms @ 11.03 kHz) linear ramp */
+    (void)nsmp;
+    k->av_q8       = k->amp_av  * 256;
+    k->avs_q8      = k->amp_avs * 256;
+    k->ah_q8       = k->amp_ah  * 256;
+    k->af_q8       = k->amp_af  * 256;
+    k->step_av_q8  = (av  - k->amp_av)  * mul;
+    k->step_avs_q8 = (avs - k->amp_avs) * mul;
+    k->step_ah_q8  = (ah  - k->amp_ah)  * mul;
+    k->step_af_q8  = (af  - k->amp_af)  * mul;
+    k->ramp_rem    = rlen;
+}
+
 static void clear_source_gains(adrift_klatt_t *k) {
     k->frame_rem   = 0u;
     k->cur_f0_hz10 = 0u;
-    k->amp_av      = 0;
-    k->amp_avs     = 0;
-    k->amp_ah      = 0;
-    k->amp_af      = 0;
+    set_source_gain_targets(k, 0, 0, 0, 0, 16u);
     k->amp_a2      = 0;
     k->amp_a3      = 0;
     k->amp_a4      = 0;
@@ -332,6 +362,19 @@ static void clear_source_gains(adrift_klatt_t *k) {
 
 static void clear_filter_states(adrift_klatt_t *k) {
     clear_source_gains(k);
+    k->amp_av      = 0;
+    k->amp_avs     = 0;
+    k->amp_ah      = 0;
+    k->amp_af      = 0;
+    k->av_q8       = 0;
+    k->avs_q8      = 0;
+    k->ah_q8       = 0;
+    k->af_q8       = 0;
+    k->step_av_q8  = 0;
+    k->step_avs_q8 = 0;
+    k->step_ah_q8  = 0;
+    k->step_af_q8  = 0;
+    k->ramp_rem    = 0u;
     k->rgp.y1 = 0; k->rgp.y2 = 0;
     k->rgz.y1 = 0; k->rgz.y2 = 0;
     k->rgs.y1 = 0; k->rgs.y2 = 0;
@@ -357,6 +400,10 @@ static void clear_filter_states(adrift_klatt_t *k) {
     k->up_x2        = 0;
     k->up_y1        = 0;
     k->up_y2        = 0;
+    k->up2_x1       = 0;
+    k->up2_x2       = 0;
+    k->up2_y1       = 0;
+    k->up2_y2       = 0;
     k->dc_x1        = 0;
     k->dc_y1        = 0;
 }
@@ -420,13 +467,17 @@ static void load_next_frame(adrift_klatt_t *k) {
     k->prev_ab = fr.ab;
 
     k->cur_f0_hz10 = fr.f0_hz10;
+    if (fr.f0_hz10 >= 500u) {
+        k->last_f0_hz10 = fr.f0_hz10;
+    }
     k->cur_sw_par  = fr.sw_par;
 
-    /* Calibrated Klatt linear gains */
-    k->amp_av  = db_to_lin((int32_t)fr.av,  15);
-    k->amp_avs = db_to_lin((int32_t)fr.avs, 19);
-    k->amp_ah  = db_to_lin((int32_t)fr.ah,  -6);
-    k->amp_af  = db_to_lin((int32_t)fr.af,   0);
+    /* Calibrated Klatt linear gains (ramped across 8..16 samples to eliminate phoneme step clicks) */
+    int32_t next_av  = (fr.sw_par == 0u) ? db_to_lin((int32_t)fr.av,  15) : 0;
+    int32_t next_avs = (fr.sw_par == 0u) ? db_to_lin((int32_t)fr.avs, 19) : 0;
+    int32_t next_ah  = (fr.sw_par == 0u) ? db_to_lin((int32_t)fr.ah,  -6) : 0;
+    int32_t next_af  = db_to_lin((int32_t)fr.af, 0);
+    set_source_gain_targets(k, next_av, next_avs, next_ah, next_af, nsmp);
 
     /* Alternating parallel formant polarities per Klatt (1980) PARCOE */
     k->amp_a2  =  db_to_lin((int32_t)fr.a2, 13);
@@ -445,6 +496,28 @@ static int32_t step_klatt_sample(adrift_klatt_t *k) {
     if (k->frame_rem > 0u) {
         k->frame_rem--;
     }
+    if (k->ramp_rem > 0u) {
+        k->ramp_rem--;
+        if (k->ramp_rem == 0u) {
+            k->amp_av  = k->tgt_av;
+            k->amp_avs = k->tgt_avs;
+            k->amp_ah  = k->tgt_ah;
+            k->amp_af  = k->tgt_af;
+            k->av_q8   = k->tgt_av  * 256;
+            k->avs_q8  = k->tgt_avs * 256;
+            k->ah_q8   = k->tgt_ah  * 256;
+            k->af_q8   = k->tgt_af  * 256;
+        } else {
+            k->av_q8  += k->step_av_q8;
+            k->avs_q8 += k->step_avs_q8;
+            k->ah_q8  += k->step_ah_q8;
+            k->af_q8  += k->step_af_q8;
+            k->amp_av  = k->av_q8  >> 8;
+            k->amp_avs = k->avs_q8 >> 8;
+            k->amp_ah  = k->ah_q8  >> 8;
+            k->amp_af  = k->af_q8  >> 8;
+        }
+    }
 
     /* Pseudo-Gaussian zero-mean noise from 4 xorshift32 steps (~ +-8192) */
     uint32_t rng = k->rng;
@@ -459,15 +532,16 @@ static int32_t step_klatt_sample(adrift_klatt_t *k) {
     int32_t noise = acc >> 4;
 
     /* Glottal impulse train + RGP/RGZ normal voicing + RGS quasi-sinusoidal voicing */
-    int32_t uglot = 0;
-    bool    voiced = (k->cur_f0_hz10 >= 500u) && (k->amp_av > 0 || k->amp_avs > 0);
+    int32_t  uglot       = 0;
+    uint16_t eff_f0_hz10 = (k->cur_f0_hz10 >= 500u) ? k->cur_f0_hz10 : k->last_f0_hz10;
+    bool     voiced      = (eff_f0_hz10 >= 500u) && (k->amp_av > 0 || k->amp_avs > 0);
     if (voiced) {
         if (k->nper >= k->t0) {
             k->nper = 0u;
             /* Gentle +-0.5 Hz pitch micro-flutter for natural voice warmth */
             k->flutter_phase = (uint16_t)((k->flutter_phase + 53u) & 4095u);
             int32_t flut = cos_2pi_q14(k->flutter_phase) >> 11; /* -8..+8 (0.1 Hz units) */
-            int32_t f0_eff = clamp_i32((int32_t)k->cur_f0_hz10 + flut, 500, 4000);
+            int32_t f0_eff = clamp_i32((int32_t)eff_f0_hz10 + flut, 500, 4000);
             int32_t new_t0 = (ADRIFT_KLATT_SR * 10) / f0_eff;
             k->t0 = (uint16_t)clamp_i32(new_t0, 24, 220);
         }
@@ -494,7 +568,7 @@ static int32_t step_klatt_sample(adrift_klatt_t *k) {
 
     /* Cascade vocal-tract branch: RNZ -> RNP -> R5 -> R4 -> R3 -> R2 -> R1 */
     int32_t asp      = klatt_mul_q14(k->amp_ah, noise);
-    int32_t casc_in  = (k->cur_sw_par == 0u) ? (uglot + asp) : 0;
+    int32_t casc_in  = uglot + asp;
     int32_t casc_out = res_step_zero(&k->rnz, casc_in);
     casc_out = res_step_pole(&k->rnp, casc_out);
     casc_out = res_step_pole(&k->r5,  casc_out);
@@ -534,17 +608,19 @@ static int32_t step_klatt_sample(adrift_klatt_t *k) {
 
     if (k->amp_ab != 0) par_out += klatt_mul_q14(k->amp_ab, fdiff);
 
-    return clamp_i32((casc_out + par_out) * 16, KLATT_STATE_MIN, KLATT_STATE_MAX);
+    return clamp_i32((casc_out + par_out) * 18, KLATT_STATE_MIN, KLATT_STATE_MAX);
 }
 
 static inline int16_t soft_limit_i16(int32_t x) {
-    /* Smooth knee above +-22000 into +-30000 so sibilants/vowels never hard-clip */
+    /* C1 rational soft-knee above +-22000 into +-31000 so sibilants/vowels never kink or hard-clip */
     if (x > 22000) {
-        x = 22000 + ((x - 22000) >> 2);
-        if (x > 31000) x = 31000;
+        uint32_t d = (uint32_t)(x - 22000);
+        if (d > 262144u) d = 262144u;
+        x = 22000 + (int32_t)((d * 9000u) / (9000u + d));
     } else if (x < -22000) {
-        x = -22000 + ((x + 22000) >> 2);
-        if (x < -31000) x = -31000;
+        uint32_t d = (uint32_t)(-x - 22000);
+        if (d > 262144u) d = 262144u;
+        x = -(22000 + (int32_t)((d * 9000u) / (9000u + d)));
     }
     return (int16_t)x;
 }
@@ -567,9 +643,9 @@ bool adrift_klatt_render(adrift_klatt_t *k, int16_t *mono_out, uint32_t frames) 
 
     bool any_speaking = speaking;
 
-    /* 2-pole Butterworth anti-imaging LPF @ fc = 4800 Hz, fs = 44118 Hz (exact unity DC gain):
-     *   b0 = 1273, b1 = 2546, b2 = 1273 (sum = 5092)
-     *  -a1 = 17561, -a2 = -6269 (16384 - 17561 + 6269 = 5092) */
+    /* 4-pole cascaded Butterworth anti-imaging LPF @ fs = 44118 Hz (exact unity DC gain, zero limit cycle):
+     *   Stage 1 (fc = 4800 Hz): b = (1273, 2546, 1273), -a1 = 17561, -a2 = -6269 (sum = 5092)
+     *   Stage 2 (fc = 5300 Hz): b = (1499, 2998, 1499), -a1 = 16078, -a2 = -5690 (sum = 5996) */
     for (uint32_t i = 0u; i < frames; i++) {
         if (!speaking && k->tail_rem == 0u) {
             mono_out[i] = 0;
@@ -586,7 +662,7 @@ bool adrift_klatt_render(adrift_klatt_t *k, int16_t *mono_out, uint32_t frames) 
         /* 4x linear interpolation step */
         int32_t x = k->prev_raw + (((k->cur_raw - k->prev_raw) * (int32_t)(ph + 1u)) >> 2);
 
-        /* 2-pole Butterworth anti-imaging filter (fused round-toward-zero Q14) */
+        /* Stage 1 2-pole Butterworth anti-imaging filter (fused round-toward-zero Q14) */
         int32_t x_sum = x + k->up_x2;
         int32_t lp    = (1273 * (x_sum & 0x3FFF)) +
                         (2546 * (k->up_x1 & 0x3FFF)) +
@@ -597,12 +673,30 @@ bool adrift_klatt_render(adrift_klatt_t *k, int16_t *mono_out, uint32_t frames) 
                         (17561 * (k->up_y1 >> 14)) +
                         (-6269 * (k->up_y2 >> 14)) +
                         (lp >> 14);
-        int32_t y     = q + ((q < 0 && (lp & 0x3FFF) != 0) ? 1 : 0);
-        y = clamp_i32(y, KLATT_STATE_MIN, KLATT_STATE_MAX);
+        int32_t y1    = q + ((q < 0 && (lp & 0x3FFF) != 0) ? 1 : 0);
+        y1 = clamp_i32(y1, KLATT_STATE_MIN, KLATT_STATE_MAX);
         k->up_x2 = k->up_x1;
         k->up_x1 = x;
         k->up_y2 = k->up_y1;
-        k->up_y1 = y;
+        k->up_y1 = y1;
+
+        /* Stage 2 2-pole Butterworth anti-imaging filter (fused round-toward-zero Q14) */
+        int32_t y_sum = y1 + k->up2_x2;
+        int32_t lp2   = (1499 * (y_sum & 0x3FFF)) +
+                        (2998 * (k->up2_x1 & 0x3FFF)) +
+                        (16078 * (k->up2_y1 & 0x3FFF)) +
+                        (-5690 * (k->up2_y2 & 0x3FFF));
+        int32_t q2    = (1499 * (y_sum >> 14)) +
+                        (2998 * (k->up2_x1 >> 14)) +
+                        (16078 * (k->up2_y1 >> 14)) +
+                        (-5690 * (k->up2_y2 >> 14)) +
+                        (lp2 >> 14);
+        int32_t y     = q2 + ((q2 < 0 && (lp2 & 0x3FFF) != 0) ? 1 : 0);
+        y = clamp_i32(y, KLATT_STATE_MIN, KLATT_STATE_MAX);
+        k->up2_x2 = k->up2_x1;
+        k->up2_x1 = y1;
+        k->up2_y2 = k->up2_y1;
+        k->up2_y1 = y;
 
         /* 1-pole ~25 Hz DC blocker: y_dc = x - x1 + 0.996 * y_dc_prev */
         int32_t dc = clamp_i32(y - k->dc_x1 + klatt_mul_q14(16320, k->dc_y1),

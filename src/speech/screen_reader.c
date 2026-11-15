@@ -611,6 +611,44 @@ void adrift_sr_tick(adrift_screen_reader_t *sr,
     }
 }
 
+/* C1 rational soft-knee headphone limiters (-2.5 dBFS knee -> 0 dBFS ceiling, pure 32-bit math) */
+static inline int16_t sr_soft_limit_s16(int32_t x) {
+    if (x > 24576) {
+        uint32_t d = (uint32_t)(x - 24576);
+        if (d > 262144u) d = 262144u;
+        return (int16_t)(24576 + (int32_t)((d * 8191u) / (8191u + d)));
+    }
+    if (x < -24576) {
+        uint32_t d = (uint32_t)(-x - 24576);
+        if (d > 262144u) d = 262144u;
+        return (int16_t)-(24576 + (int32_t)((d * 8191u) / (8191u + d)));
+    }
+    return (int16_t)x;
+}
+
+static inline int32_t sr_soft_limit_q23(int32_t x) {
+    int32_t ax = (x < 0) ? -x : x;
+    if (ax <= 6291456) {
+        return x;
+    }
+    uint32_t d = (uint32_t)(ax - 6291456);
+    if (d > 12582912u) {
+        d = 12582912u;
+    }
+    uint32_t den  = 2097152u + d; /* < 2^24: 3-stage exact 32-bit division of 2^42 by den */
+    uint32_t q_hi = 0x80000000u / den;
+    uint32_t rem1 = 0x80000000u - q_hi * den;
+    uint32_t q_md = (rem1 << 7) / den;
+    uint32_t rem2 = (rem1 << 7) - q_md * den;
+    uint32_t q_lo = (rem2 << 4) / den;
+    uint32_t quot = (q_hi << 11) + (q_md << 4) + q_lo;
+    int32_t  y    = 6291456 + (int32_t)(2097152u - quot);
+    if (y > 8388607) {
+        y = 8388607;
+    }
+    return (x < 0) ? -y : y;
+}
+
 void adrift_sr_mix_line_out_scaled(adrift_screen_reader_t *sr,
                                    int16_t *stereo_inout,
                                    uint32_t frames,
@@ -662,15 +700,13 @@ void adrift_sr_mix_line_out_scaled(adrift_screen_reader_t *sr,
             int32_t  r   = ((int32_t)stereo_inout[idx + 1u] * (int32_t)dg) >> 14;
             int32_t  sp  = ((int32_t)sp_mono[i] * mg_q15) >> 15;
 
-            l += sp;
-            r += sp;
-            if (l > 32767)  l = 32767;
-            if (l < -32768) l = -32768;
-            if (r > 32767)  r = 32767;
-            if (r < -32768) r = -32768;
-
-            stereo_inout[idx]      = (int16_t)l;
-            stereo_inout[idx + 1u] = (int16_t)r;
+            if (sp != 0) {
+                stereo_inout[idx]      = sr_soft_limit_s16(l + sp);
+                stereo_inout[idx + 1u] = sr_soft_limit_s16(r + sp);
+            } else {
+                stereo_inout[idx]      = (int16_t)dsp_clamp_i32(l, -32768, 32767);
+                stereo_inout[idx + 1u] = (int16_t)dsp_clamp_i32(r, -32768, 32767);
+            }
         }
 
         sr->duck_gain_q14 = dg;
@@ -736,15 +772,13 @@ void adrift_sr_mix_line_out_scaled_q23(adrift_screen_reader_t *sr,
             int32_t  sp_in = (int32_t)sp_mono[i];
             int32_t  sp    = (sp_in == 0 || mg_q15 == 0) ? 0 : (((sp_in * mg_q15) + 64) >> 7);
 
-            l += sp;
-            r += sp;
-            if (l > 8388607)  l = 8388607;
-            if (l < -8388608) l = -8388608;
-            if (r > 8388607)  r = 8388607;
-            if (r < -8388608) r = -8388608;
-
-            stereo_q23_inout[idx]      = l;
-            stereo_q23_inout[idx + 1u] = r;
+            if (sp != 0) {
+                stereo_q23_inout[idx]      = sr_soft_limit_q23(l + sp);
+                stereo_q23_inout[idx + 1u] = sr_soft_limit_q23(r + sp);
+            } else {
+                stereo_q23_inout[idx]      = dsp_clamp_i32(l, -8388608, 8388607);
+                stereo_q23_inout[idx + 1u] = dsp_clamp_i32(r, -8388608, 8388607);
+            }
         }
 
         sr->duck_gain_q14 = dg;

@@ -154,6 +154,21 @@ static DSP_HOT_RAM int32_t fx_gen_lfos(adrift_fx_state_t *fx,
     return last_lfo;
 }
 
+/* Scale polyphonic bus sum into Q15 chorus delay line (+12 dB / 4-voice linear headroom
+ * up to +/-98304, with division-free C1 soft-knee limiting above +/-98304 up to +/-163840). */
+DSP_ALWAYS_INLINE int16_t fx_chorus_in_sat16(int32_t sig) {
+    if (sig >= 163840)  return 32767;
+    if (sig <= -163840) return -32767;
+    int32_t x = (sig >= 0) ? ((sig + 2) >> 2) : -((-sig + 2) >> 2);
+    if (x >= -24576 && x <= 24576) {
+        return (int16_t)x;
+    }
+    int32_t ax  = (x < 0) ? -x : x;
+    int32_t d   = ax - 24576;
+    int32_t out = 24576 + d - ((d * d + 32767) >> 15);
+    return (int16_t)((x < 0) ? -out : out);
+}
+
 /* Stage 1: Stereo BBD Dimension / Ensemble Chorus (1-cycle RAMTEXT leaf) */
 static DSP_HOT_RAM void fx_pass_chorus(adrift_fx_state_t *fx,
                                        const fx_block_coefs_t *c,
@@ -171,8 +186,8 @@ static DSP_HOT_RAM void fx_pass_chorus(adrift_fx_state_t *fx,
         int32_t sig_l = accum_l[i];
         int32_t sig_r = accum_r[i];
 
-        fx->chorus_l[chorus_w] = dsp_sat16(sig_l);
-        fx->chorus_r[chorus_w] = dsp_sat16(sig_r);
+        fx->chorus_l[chorus_w] = fx_chorus_in_sat16(sig_l);
+        fx->chorus_r[chorus_w] = fx_chorus_in_sat16(sig_r);
 
         /* Dual-LFO modulation around 360 samples (~8.2 ms) in Q8 */
         int32_t sin1_l = lfo[i].s1_l;
@@ -191,12 +206,12 @@ static DSP_HOT_RAM void fx_pass_chorus(adrift_fx_state_t *fx,
         chorus_lp_l += ((raw_l - chorus_lp_l) * 22000) >> 15;
         chorus_lp_r += ((raw_r - chorus_lp_r) * 22000) >> 15;
 
-        /* Dimension cross-phase stereo widening */
+        /* Dimension cross-phase stereo widening (restore +12 dB polyphonic headroom scale) */
         int32_t wet_l = chorus_lp_l - (chorus_lp_r >> 2);
         int32_t wet_r = chorus_lp_r - (chorus_lp_l >> 2);
 
-        accum_l[i] = sig_l + dsp_mul_q15(wet_l, chorus_wet_q15);
-        accum_r[i] = sig_r + dsp_mul_q15(wet_r, chorus_wet_q15);
+        accum_l[i] = sig_l + dsp_mul_q15(wet_l, chorus_wet_q15) * 4;
+        accum_r[i] = sig_r + dsp_mul_q15(wet_r, chorus_wet_q15) * 4;
         chorus_w   = (chorus_w + 1u) & ADRIFT_FX_CHORUS_MASK;
     }
 

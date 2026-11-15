@@ -396,6 +396,56 @@ void test_master_fx(void) {
           "Expected Stereo Dimension Chorus to widen mono voice (diff=%d, lfo=%d)",
           chorus_stereo_diff, s->fx.meter_chorus_lfo_q15);
 
+    /* Polyphonic Chorus headroom check: a 4-voice bus signal (+/-96000) must pass through
+     * the Chorus delay line linearly without hard-clipping at int16_t (+/-32767). */
+    {
+        const uint32_t CN = 2048u;
+        adrift_fx_state_t *fx_1x = (adrift_fx_state_t *)calloc(1u, sizeof(adrift_fx_state_t));
+        adrift_fx_state_t *fx_4x = (adrift_fx_state_t *)calloc(1u, sizeof(adrift_fx_state_t));
+        int32_t *al_1x = (int32_t *)calloc(CN, sizeof(int32_t));
+        int32_t *ar_1x = (int32_t *)calloc(CN, sizeof(int32_t));
+        int32_t *al_4x = (int32_t *)calloc(CN, sizeof(int32_t));
+        int32_t *ar_4x = (int32_t *)calloc(CN, sizeof(int32_t));
+        adrift_fx_init(fx_1x);
+        adrift_fx_init(fx_4x);
+        adrift_fx_params_t cp;
+        memset(&cp, 0, sizeof(cp));
+        cp.chorus_mix = 800;
+
+        for (uint32_t i = 0u; i < CN; i++) {
+            double s_val = sin(2.0 * M_PI * 440.0 * (double)i / (double)ADRIFT_SAMPLE_RATE);
+            int32_t v1 = (int32_t)llround(24000.0 * s_val);
+            al_1x[i] = v1;
+            ar_1x[i] = v1;
+            al_4x[i] = v1 * 4;
+            ar_4x[i] = v1 * 4;
+        }
+        adrift_fx_process(fx_1x, &cp, al_1x, ar_1x, CN);
+        adrift_fx_process(fx_4x, &cp, al_4x, ar_4x, CN);
+
+        double err_sq = 0.0;
+        double ref_sq = 0.0;
+        for (uint32_t i = 768u; i < CN; i++) {
+            double s_val = sin(2.0 * M_PI * 440.0 * (double)i / (double)ADRIFT_SAMPLE_RATE);
+            int32_t v1 = (int32_t)llround(24000.0 * s_val);
+            double wet_1x = (double)(al_1x[i] - v1);
+            double wet_4x = (double)(al_4x[i] - v1 * 4);
+            double diff   = wet_4x - 4.0 * wet_1x;
+            err_sq += diff * diff;
+            ref_sq += (4.0 * wet_1x) * (4.0 * wet_1x);
+        }
+        double nrmse = sqrt(err_sq / (ref_sq + 1.0));
+        CHECK(nrmse < 0.01,
+              "Chorus clipped polyphonic 4-voice bus signal (NRMSE=%.4f, expected < 0.01)", nrmse);
+
+        free(ar_4x);
+        free(al_4x);
+        free(ar_1x);
+        free(al_1x);
+        free(fx_4x);
+        free(fx_1x);
+    }
+
     /* 10b. Stage 2: Stereo Ping-Pong Tape Delay sustains echoes after dry voice stops */
     adrift_synth_all_notes_off(s, true);
     /* Short tight dry pluck so dry signal finishes quickly */

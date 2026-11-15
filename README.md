@@ -207,7 +207,7 @@ You can audition every factory preset right now in the **[Online Emulator](https
 | **`P20`** | **16V Monster** | `16V · 1 Group` | All 16 hardware voices stacked into one massive stereo unison lead. |
 | **`P21`** | **BBD Chorus Poly** | `16V · 2 Groups` | Lush 8-voice polysynth blending dry analog-style oscillators with warm BBD ensemble chorus. |
 | **`P22`** | **Cathedral Pipe Organ** | `16V · 4 Groups` | Four-rank pipe organ stacking 16' Bourdon sub, 8' Principal, Nazard fifth, and 4' Clarion pipes. |
-| **`P23`** | **5 Drumkits** | `16V · 5 Groups` | Physical-modeling percussion playable together on `Ch 1` or split across `MIDI Ch 1–4` (Kick, Snare, Sub, Clap, Hat). |
+| **`P23`** | **Techno Kit** | `16V · 4 Groups` | Four-channel live techno rig: analog kick (`Ch 1`), crisp metallic hats (`Ch 2`), singing saw/PWM leads (`Ch 3`), and resonant acid bass (`Ch 4`). |
 | **`P24`** | **Drone + Lead** | `16V · 4 Groups` | Expressive 8-voice bowed lead on `Ch 1` over hands-free `C3` & `G3` unison drones (`Ch 2–3`) and a pluck companion (`Ch 4`). |
 
 ---

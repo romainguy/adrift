@@ -894,6 +894,89 @@ void test_voice_groups_and_save_menu(const char *wav_dir) {
           "P20 16V MONSTER stereo output imbalance or silence (L=%.2f dBFS, R=%.2f dBFS, stereo=%d)",
           p20_rms_l, p20_rms_r, (int)p20_stereo);
     adrift_synth_all_notes_off(s, true);
+
+    /* Verify P23 TECHNO KIT (index 22): 4-channel live techno kit matching Kick, Hats, Leads, Acid Bass
+     * across G1..G4 (2+2+8+4 = 16 voices, MIDI Ch 1..4, G5..G6 disabled) + Master FX active */
+    adrift_synth_load_preset(s, 22u);
+    static const uint8_t     k_p23_voices[4] = { 2u, 2u, 8u, 4u };
+    static const char *const k_p23_names[4]  = { "TECHNO KICK", "TECHNO HATS", "TECHNO LEAD", "ACID BASS" };
+    CHECK(s->preset_index == 22u && strcmp(s->preset_name, "TECHNO KIT") == 0 &&
+          adrift_synth_used_voices(s) == 16u && adrift_synth_free_voices(s) == 0u &&
+          adrift_fx_is_active(&s->fx_params),
+          "P23 TECHNO KIT preset metadata/FX mismatch (idx=%u, name=%s, used=%u)",
+          s->preset_index, s->preset_name, adrift_synth_used_voices(s));
+    for (uint8_t g = 0u; g < 4u; g++) {
+        CHECK(s->groups[g].num_voices == k_p23_voices[g] &&
+              s->groups[g].assign_mode == ADRIFT_GROUP_ROUND_ROBIN &&
+              s->groups[g].midi_channel == (uint8_t)(g + 1u) &&
+              strcmp(s->groups[g].patch.name, k_p23_names[g]) == 0,
+              "P23 G%u config mismatch (nv=%u, mode=%u, ch=%u, patch=%s)",
+              g + 1u, s->groups[g].num_voices, s->groups[g].assign_mode,
+              s->groups[g].midi_channel, s->groups[g].patch.name);
+    }
+    CHECK(s->groups[4].num_voices == 0u && s->groups[5].num_voices == 0u,
+          "P23 G5/G6 should remain disabled (G5=%u, G6=%u)",
+          s->groups[4].num_voices, s->groups[5].num_voices);
+
+    /* Render & check Ch 1 Kick (MIDI 55 -> 49 Hz G1 fundamental + 98 Hz punch, steep HF rolloff) */
+    adrift_fx_reset(&s->fx);
+    adrift_midi_msg_t p23_kick = { 0x90u, 55u, 118u, 0u };
+    adrift_headless_render(pcm, N, &p23_kick, 1u);
+    double kick_rms   = compute_rms_dbfs(pcm, 0u, 11029u);
+    double kick_49    = goertzel_mag_db(pcm, 0u, 8192u, 49.0);
+    double kick_98    = goertzel_mag_db(pcm, 0u, 8192u, 98.0);
+    double kick_2000  = goertzel_mag_db(pcm, 0u, 8192u, 2000.0);
+    double kick_lo    = (kick_49 > kick_98) ? kick_49 : kick_98;
+    double kick_hf_r  = calc_hf_diff_ratio_db(pcm, 0u, 4096u);
+    CHECK(kick_rms > -26.0 && kick_lo > kick_2000 + 12.0 && kick_hf_r < -12.0,
+          "P23 Ch1 Kick spectral/level mismatch (rms=%.2f dBFS, f49=%.1f, f98=%.1f, f2k=%.1f, hf=%.2f dB)",
+          kick_rms, kick_49, kick_98, kick_2000, kick_hf_r);
+    adrift_synth_all_notes_off(s, true);
+
+    /* Render & check Ch 2 Hats (MIDI 72 -> crisp HF sizzle > 5 kHz, fast decay) */
+    adrift_fx_reset(&s->fx);
+    adrift_midi_msg_t p23_hat[2] = {
+        { 0x91u, 72u, 118u, 0u },
+        { 0x81u, 72u, 0u,   2646u }
+    };
+    adrift_headless_render(pcm, N, p23_hat, 2u);
+    double hat_early_rms = compute_rms_dbfs(pcm, 0u, 2048u);
+    double hat_tail_rms  = compute_rms_dbfs(pcm, 8192u, 8192u);
+    double hat_hf_ratio  = calc_hf_diff_ratio_db(pcm, 0u, 4096u);
+    CHECK(hat_early_rms > -26.0 && hat_tail_rms < hat_early_rms - 10.0 &&
+          hat_hf_ratio > -2.0 && hat_hf_ratio > kick_hf_r + 12.0,
+          "P23 Ch2 Hats envelope/HF mismatch (early=%.2f, tail=%.2f, hf_ratio=%.2f, kick_hf=%.2f)",
+          hat_early_rms, hat_tail_rms, hat_hf_ratio, kick_hf_r);
+    adrift_synth_all_notes_off(s, true);
+
+    /* Render & check Ch 3 Leads (MIDI 60 -> rich sustained stereo lead) */
+    adrift_fx_reset(&s->fx);
+    adrift_midi_msg_t p23_lead = { 0x92u, 60u, 112u, 0u };
+    adrift_headless_render(pcm, N, &p23_lead, 1u);
+    double lead_rms    = compute_rms_dbfs(pcm, 2048u, 16384u);
+    bool   lead_stereo = false;
+    for (uint32_t i = 2048u; i < 18432u; i++) {
+        if (pcm[2u * i] != pcm[2u * i + 1u]) {
+            lead_stereo = true;
+            break;
+        }
+    }
+    CHECK(lead_rms > -26.0 && lead_stereo,
+          "P23 Ch3 Lead output mismatch (rms=%.2f dBFS, stereo=%d)", lead_rms, (int)lead_stereo);
+    adrift_synth_all_notes_off(s, true);
+
+    /* Render & check Ch 4 Acid Bass (MIDI 60 -> 65.4 Hz C2 fundamental + 130.8 Hz / 523 Hz acid presence) */
+    adrift_fx_reset(&s->fx);
+    adrift_midi_msg_t p23_bass = { 0x93u, 60u, 118u, 0u };
+    adrift_headless_render(pcm, N, &p23_bass, 1u);
+    double bass_rms = compute_rms_dbfs(pcm, 0u, 11029u);
+    double bass_65  = goertzel_mag_db(pcm, 0u, 8192u, 65.41);
+    double bass_131 = goertzel_mag_db(pcm, 0u, 8192u, 130.81);
+    double bass_523 = goertzel_mag_db(pcm, 0u, 8192u, 523.25);
+    CHECK(bass_rms > -26.0 && ((bass_65 > -32.0) || (bass_131 > -32.0)) && bass_523 > -48.0,
+          "P23 Ch4 Acid Bass output mismatch (rms=%.2f dBFS, f65=%.1f, f131=%.1f, f523=%.1f)",
+          bass_rms, bass_65, bass_131, bass_523);
+    adrift_synth_all_notes_off(s, true);
     adrift_synth_load_preset(s, 0u);
 
     /* 8g. Scale Browser UI (ALGORITHM encoder open/scroll/wrap, KNOB1 root, OCT- cancel, OCT+ apply, white-key mapping) */

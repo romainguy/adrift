@@ -84,6 +84,7 @@ const VALID_WORDS = new Set([
   "fast", "granular", "void", "iron", "pulsing", "flute", "sitar", "jawari",
   "marimba", "bar", "wood", "glass", "bowl", "bowls", "clavinet", "funk",
   "monster", "organ", "drum", "kit", "kits", "modal", "kick", "snare", "lead",
+  "leads", "hat", "hats", "techno",
   "warm", "bell", "bells", "string", "strings", "brass", "soft", "bright",
   "dark", "deep", "ambient", "classic", "vintage", "ensemble", "electric",
   "piano", "digital", "acid"

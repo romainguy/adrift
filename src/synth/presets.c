@@ -1,6 +1,6 @@
 #include "synth_internal.h"
 
-#define ADRIFT_NUM_PATCH_TEMPLATES 33u
+#define ADRIFT_NUM_PATCH_TEMPLATES 35u
 
 static const adrift_patch_t k_factory_patches[ADRIFT_NUM_PATCH_TEMPLATES] = {
     /* 0: Classic plucked acoustic guitar / BBD string ("Guitar" / Karplus-Strong) */
@@ -874,63 +874,77 @@ static const adrift_patch_t k_factory_patches[ADRIFT_NUM_PATCH_TEMPLATES] = {
         .lfo_wave = ADRIFT_LFO_TRI, .lfo_rate = 350, .lfo_depth = 44,
         .lfo_dest = ADRIFT_MOD_BBD_PITCH, .mw_depth = 240, .pb_range = 2, .legato = false
     },
-    /* 30: Modal Kick / Bass Tom ("5 drumkits" Low Drum Shell) */
+    /* 30: Bullfrog-style Analog Techno Kick ("TECHNO KIT" G1 Ch 1) */
     {
-        .name = "MODAL KICK",
+        .name = "TECHNO KICK",
         .exc = {
-            .wave_morph = 180, .pulse_width = 512, .vco_level = 960,
+            .wave_morph = 260, .pulse_width = 512, .vco_level = 1010,
             .vco_octave = -1, .vco_semi = 0, .vco_fine = 0,
-            .analog_drift = 360, .vco_keytrack = true,
-            .noise_level = 380, .sh_rate = 640, .pluck = 860
+            .analog_drift = 120, .vco_keytrack = true,
+            .noise_level = 165, .sh_rate = 880, .pluck = 980
         },
         .env1 = {
-            .onset_delay = 0, .attack = 0, .decay = 165, .sustain = 0,
-            .release = 150, .vel_sens = 700, .loop_mode = ADRIFT_ENV_LOOP_OFF, .drone_hold = false
+            .onset_delay = 0, .attack = 0, .decay = 265, .sustain = 0,
+            .release = 220, .vel_sens = 520, .loop_mode = ADRIFT_ENV_LOOP_OFF,
+            .drone_hold = false, .range = ADRIFT_ENV_RANGE_NORM
         },
-        .in_lpf_cutoff = 520,
-        .in_lpf_res    = 760,
+        .in_lpf_cutoff = 395,
+        .in_lpf_res    = 650,
         .bbd = {
-            .feedback = 825, .fb_lpf_cutoff = 540, .glide = 340,
-            .invert = false, .invert_pitch_comp = false, .bbd_noise = 220, .dispersion = 340
+            .feedback = 720, .fb_lpf_cutoff = 470, .glide = 0,
+            .invert = false, .invert_pitch_comp = false, .bbd_noise = 80, .dispersion = 220
         },
-        .dry_wet    = 720,
+        .dry_wet    = 380,
         .env2 = {
-            .onset_delay = 0, .attack = 0, .decay = 440, .sustain = 200,
-            .release = 360, .vel_sens = 480, .loop_mode = ADRIFT_ENV_LOOP_OFF, .drone_hold = false
+            .onset_delay = 0, .attack = 0, .decay = 365, .sustain = 0,
+            .release = 290, .vel_sens = 420, .loop_mode = ADRIFT_ENV_LOOP_OFF,
+            .drone_hold = false, .range = ADRIFT_ENV_RANGE_NORM
         },
-        .master_vol = 900,
-        .lfo_wave = ADRIFT_LFO_SAW, .lfo_rate = 520, .lfo_depth = -220,
-        .lfo_dest = ADRIFT_MOD_VCO_PITCH, .mw_depth = 260,
-        .pb_range = 12, .legato = false
+        .master_vol = 1023,
+        .lfo_wave  = ADRIFT_LFO_SINE, .lfo_rate  = 240, .lfo_depth  = 0, .lfo_dest  = ADRIFT_MOD_IN_LPF,
+        .lfo2_wave = ADRIFT_LFO_TRI,  .lfo2_rate = 180, .lfo2_depth = 0, .lfo2_dest = ADRIFT_MOD_ENV1_DEC,
+        .lfo3_wave = ADRIFT_LFO_SINE, .lfo3_rate = 150, .lfo3_depth = 0, .lfo3_dest = ADRIFT_MOD_DRY_WET,
+        .mw_depth = 260, .pb_range = 12, .legato = false,
+        .arp = {
+            .mode = ADRIFT_ARP_OFF, .range = 1, .rate_bpm = 128, .gate = 50,
+            .velocity = 0, .latch = false, .swing = 0, .ratchet = ADRIFT_RATCHET_1X
+        }
     },
-    /* 31: Modal Snare / Metallic Percussion ("5 drumkits" S&H Snare/Hat) */
+    /* 31: Crisp Metallic Techno Hi-Hats ("TECHNO KIT" G2 Ch 2) */
     {
-        .name = "MODAL SNARE",
+        .name = "TECHNO HATS",
         .exc = {
-            .wave_morph = 920, .pulse_width = 240, .vco_level = 950,
-            .vco_octave = 0, .vco_semi = 6, .vco_fine = 0,
-            .analog_drift = 420, .vco_keytrack = false, /* Fixed drum membrane pitch */
-            .noise_level = 650, .sh_rate = 620, .pluck = 740
+            .wave_morph = 1023, .pulse_width = 110, .vco_level = 980,
+            .vco_octave = 2, .vco_semi = 24, .vco_fine = 0,
+            .analog_drift = 520, .vco_keytrack = false,
+            .noise_level = 965, .sh_rate = 1023, .pluck = 0
         },
         .env1 = {
-            .onset_delay = 0, .attack = 0, .decay = 195, .sustain = 0,
-            .release = 180, .vel_sens = 750, .loop_mode = ADRIFT_ENV_LOOP_OFF, .drone_hold = false
+            .onset_delay = 0, .attack = 0, .decay = 460, .sustain = 0,
+            .release = 380, .vel_sens = 860, .loop_mode = ADRIFT_ENV_LOOP_OFF,
+            .drone_hold = false, .range = ADRIFT_ENV_RANGE_SHORT
         },
-        .in_lpf_cutoff = 880,
-        .in_lpf_res    = 480,
+        .in_lpf_cutoff = 1023,
+        .in_lpf_res    = 280,
         .bbd = {
-            .feedback = 845, .fb_lpf_cutoff = 840, .glide = 0,
-            .invert = true, .invert_pitch_comp = true, .bbd_noise = 280, .dispersion = 760
+            .feedback = 540, .fb_lpf_cutoff = 1023, .glide = 0,
+            .invert = true, .invert_pitch_comp = true, .bbd_noise = 280, .dispersion = 950
         },
-        .dry_wet    = 820,
+        .dry_wet    = 900,
         .env2 = {
-            .onset_delay = 0, .attack = 0, .decay = 480, .sustain = 240,
-            .release = 380, .vel_sens = 500, .loop_mode = ADRIFT_ENV_LOOP_OFF, .drone_hold = false
+            .onset_delay = 0, .attack = 0, .decay = 620, .sustain = 0,
+            .release = 520, .vel_sens = 680, .loop_mode = ADRIFT_ENV_LOOP_OFF,
+            .drone_hold = false, .range = ADRIFT_ENV_RANGE_SHORT
         },
-        .master_vol = 860,
-        .lfo_wave = ADRIFT_LFO_SH, .lfo_rate = 820, .lfo_depth = 300,
-        .lfo_dest = ADRIFT_MOD_IN_LPF, .mw_depth = 300,
-        .pb_range = 12, .legato = false
+        .master_vol = 1023,
+        .lfo_wave  = ADRIFT_LFO_TRI,  .lfo_rate  = 310, .lfo_depth  = 0,  .lfo_dest  = ADRIFT_MOD_ENV1_DEC,
+        .lfo2_wave = ADRIFT_LFO_SH,   .lfo2_rate = 780, .lfo2_depth = 65, .lfo2_dest = ADRIFT_MOD_SH_CLK,
+        .lfo3_wave = ADRIFT_LFO_SINE, .lfo3_rate = 210, .lfo3_depth = 90, .lfo3_dest = ADRIFT_MOD_PAN,
+        .mw_depth = 340, .pb_range = 12, .legato = false,
+        .arp = {
+            .mode = ADRIFT_ARP_OFF, .range = 1, .rate_bpm = 128, .gate = 45,
+            .velocity = 0, .latch = false, .swing = 0, .ratchet = ADRIFT_RATCHET_1X
+        }
     },
     /* 32: 16-oscillator variable-character Demon Core swarm + warm OTA SVF */
     {
@@ -961,6 +975,78 @@ static const adrift_patch_t k_factory_patches[ADRIFT_NUM_PATCH_TEMPLATES] = {
         .lfo2_wave = ADRIFT_LFO_TRI,  .lfo2_rate = 175, .lfo2_depth = 85,  .lfo2_dest = ADRIFT_MOD_VCO_MORPH,
         .lfo3_wave = ADRIFT_LFO_SINE, .lfo3_rate = 140, .lfo3_depth = 105, .lfo3_dest = ADRIFT_MOD_IN_LPF,
         .mw_depth  = 320, .pb_range = 2, .legato = true
+    },
+    /* 33: Singing Analog Saw/PWM Techno Lead ("TECHNO KIT" G3 Ch 3) */
+    {
+        .name = "TECHNO LEAD",
+        .exc = {
+            .wave_morph = 740, .pulse_width = 390, .vco_level = 925,
+            .vco_octave = 0, .vco_semi = 0, .vco_fine = 0,
+            .analog_drift = 540, .vco_keytrack = true,
+            .noise_level = 24, .sh_rate = 1023, .pluck = 120
+        },
+        .env1 = {
+            .onset_delay = 0, .attack = 12, .decay = 460, .sustain = 480,
+            .release = 460, .vel_sens = 480, .loop_mode = ADRIFT_ENV_LOOP_OFF,
+            .drone_hold = false, .range = ADRIFT_ENV_RANGE_NORM
+        },
+        .in_lpf_cutoff = 670,
+        .in_lpf_res    = 550,
+        .bbd = {
+            .feedback = 540, .fb_lpf_cutoff = 720, .glide = 85,
+            .invert = false, .invert_pitch_comp = false, .bbd_noise = 110, .dispersion = 140
+        },
+        .dry_wet    = 260,
+        .env2 = {
+            .onset_delay = 0, .attack = 10, .decay = 520, .sustain = 560,
+            .release = 520, .vel_sens = 380, .loop_mode = ADRIFT_ENV_LOOP_OFF,
+            .drone_hold = false, .range = ADRIFT_ENV_RANGE_NORM
+        },
+        .master_vol = 750,
+        .lfo_wave  = ADRIFT_LFO_SINE, .lfo_rate  = 275, .lfo_depth  = 220, .lfo_dest  = ADRIFT_MOD_VCO_PWM,
+        .lfo2_wave = ADRIFT_LFO_TRI,  .lfo2_rate = 185, .lfo2_depth = 135, .lfo2_dest = ADRIFT_MOD_IN_LPF,
+        .lfo3_wave = ADRIFT_LFO_SINE, .lfo3_rate = 145, .lfo3_depth = 240, .lfo3_dest = ADRIFT_MOD_PAN,
+        .mw_depth  = 340, .pb_range = 2, .legato = false,
+        .arp = {
+            .mode = ADRIFT_ARP_OFF, .range = 2, .rate_bpm = 128, .gate = 75,
+            .velocity = 0, .latch = false, .swing = 0, .ratchet = ADRIFT_RATCHET_1X
+        }
+    },
+    /* 34: Resonant Bullfrog / 303 Acid Bassline ("TECHNO KIT" G4 Ch 4) */
+    {
+        .name = "ACID BASS",
+        .exc = {
+            .wave_morph = 740, .pulse_width = 410, .vco_level = 975,
+            .vco_octave = 0, .vco_semi = 0, .vco_fine = 0,
+            .analog_drift = 290, .vco_keytrack = true,
+            .noise_level = 16, .sh_rate = 1023, .pluck = 660
+        },
+        .env1 = {
+            .onset_delay = 0, .attack = 0, .decay = 275, .sustain = 300,
+            .release = 195, .vel_sens = 800, .loop_mode = ADRIFT_ENV_LOOP_OFF,
+            .drone_hold = false, .range = ADRIFT_ENV_RANGE_NORM
+        },
+        .in_lpf_cutoff = 640,
+        .in_lpf_res    = 635,
+        .bbd = {
+            .feedback = 480, .fb_lpf_cutoff = 720, .glide = 55,
+            .invert = false, .invert_pitch_comp = false, .bbd_noise = 90, .dispersion = 140
+        },
+        .dry_wet    = 180,
+        .env2 = {
+            .onset_delay = 0, .attack = 0, .decay = 350, .sustain = 410,
+            .release = 240, .vel_sens = 620, .loop_mode = ADRIFT_ENV_LOOP_OFF,
+            .drone_hold = false, .range = ADRIFT_ENV_RANGE_NORM
+        },
+        .master_vol = 950,
+        .lfo_wave  = ADRIFT_LFO_TRI,  .lfo_rate  = 135, .lfo_depth  = 160, .lfo_dest  = ADRIFT_MOD_IN_LPF,
+        .lfo2_wave = ADRIFT_LFO_SINE, .lfo2_rate = 210, .lfo2_depth = 85,  .lfo2_dest = ADRIFT_MOD_IN_RES,
+        .lfo3_wave = ADRIFT_LFO_SINE, .lfo3_rate = 180, .lfo3_depth = 0,   .lfo3_dest = ADRIFT_MOD_VCO_PWM,
+        .mw_depth  = 380, .pb_range = 2, .legato = false,
+        .arp = {
+            .mode = ADRIFT_ARP_OFF, .range = 1, .rate_bpm = 128, .gate = 55,
+            .velocity = 0, .latch = false, .swing = 0, .ratchet = ADRIFT_RATCHET_1X
+        }
     }
 };
 
@@ -972,7 +1058,7 @@ typedef struct {
     int16_t unison_detune; /* 0..1023 -> 0..50 cents (UNISON) / 0..80 cents (SUPER) */
     int8_t  transpose;     /* -24..+24 semitone offset for both BBD & VCO */
     uint8_t init_note;     /* Initial MIDI note (60=C4 default, 48=C3/55=G3 for drones) */
-    uint8_t patch_idx;     /* Index into k_factory_patches[0..31] */
+    uint8_t patch_idx;     /* Index into k_factory_patches[0..34] */
 } adrift_preset_group_cfg_t;
 
 typedef struct {
@@ -1269,17 +1355,20 @@ static const adrift_preset_desc_t k_factory_presets[ADRIFT_NUM_PRESETS] = {
         .fx = { .chorus_mix = 160, .delay_time = 520, .delay_fb = 360, .delay_mix = 140,
                 .reverb_size = 860, .reverb_damp = 420, .reverb_shimmer = 240, .reverb_mix = 420 }
     },
-    /* P23: 5 Drumkits — Modal Percussion Kit on Ch 1 (Kick+Snare) & Multi-Timbral Drums on Ch 2..4 ("5 drumkits") */
+    /* P23: Techno Kit — 4-Channel Live Techno Rig: Kick (Ch1), Hats (Ch2), Leads (Ch3), Acid Bass (Ch4) */
     {
-        .name = "5 DRUMKITS",
+        .name = "TECHNO KIT",
         .groups = {
-            { 4, RR,  1,   0,   0, 48, 30 }, /* G1: 4v Modal Kick / Bass Tom (Ch 1) */
-            { 4, RR,  1,   0,   0, 60, 31 }, /* G2: 4v S&H Metallic Snare / Rim (Ch 1) */
-            { 3, RR,  2,   0, -12, 36, 30 }, /* G3: 3v Sub-Kick Drum (Ch 2) */
-            { 3, RR,  3,   0,   0, 60, 31 }, /* G4: 3v Crispy Snare / Clap (Ch 3) */
-            { 2, RR,  4,   0, +12, 72,  5 }, /* G5: 2v S&H Metallic Hi-Hat / Cymbal (Ch 4) */
-            { 0, RR,  6,   0,   0, 60, 26 }
-        }
+            { 2, RR,  1,   0, -12, 55, 30 }, /* G1: 2v Analog Techno Kick (Ch 1) */
+            { 2, RR,  2,   0, +24, 72, 31 }, /* G2: 2v Crisp Metallic Techno Hi-Hats (Ch 2) */
+            { 8, RR,  3,   0,   0, 60, 33 }, /* G3: 8v Polyphonic Analog Techno Leads (Ch 3) */
+            { 4, RR,  4,   0, -24, 60, 34 }, /* G4: 4v Resonant Acid Bassline (Ch 4) */
+            { 0, RR,  5,   0,   0, 60,  4 },
+            { 0, RR,  6,   0,   0, 60,  5 }
+        },
+        .fx = { .chorus_mix = 110, .delay_time = 890, .delay_fb = 420, .delay_mix = 145,
+                .reverb_size = 640, .reverb_damp = 520, .reverb_shimmer = 95, .reverb_mix = 135,
+                .comp_mix = 540, .comp_thresh = 420, .comp_attack = 440, .comp_makeup = 280 }
     },
     /* P24: Drone + Lead — 8v Lead (G1 Ch1) over Hands-Free C3 Drone (G2 Ch2) + G3 Drone (G3 Ch3) + Pluck (G4 Ch4) */
     {

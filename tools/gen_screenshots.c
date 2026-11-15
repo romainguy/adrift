@@ -471,10 +471,10 @@ int main(int argc, char **argv) {
     adrift_app_init();
     s  = adrift_app_get_synth();
     ui = adrift_app_get_ui();
-    adrift_synth_load_preset(s, 22u); /* P23: 5 DRUMKITS -> G1..G5 active */
+    adrift_synth_load_preset(s, 22u); /* P23: TECHNO KIT -> G1..G4 active; free 4v from G3 for G5 */
     snprintf(s->preset_name, sizeof(s->preset_name), "MOD MATRIX");
     s->edit_group = 4u; /* G5 Synthwave Magenta */
-    (void)adrift_synth_set_group_voices(s, 0u, 2u);
+    (void)adrift_synth_set_group_voices(s, 2u, 4u);
     (void)adrift_synth_set_group_voices(s, 4u, 4u);
     adrift_patch_t *mp = &s->groups[4].patch;
     mp->lfo_wave   = ADRIFT_LFO_SINE;

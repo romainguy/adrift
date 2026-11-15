@@ -237,12 +237,12 @@ const PRESETS = [
   {
     idx: 22,
     code: 'P23',
-    title: '5 Drumkits',
-    oled: '5 DRUMKITS',
+    title: 'Techno Kit',
+    oled: 'TECHNO KIT',
     cat: 'leads',
-    voices: '16V · 5 Groups',
-    groups: [0, 1, 2, 3, 4],
-    desc: 'Physical-modeling percussion kit playable together on Ch 1 or split across MIDI Ch 1–4 (Kick, Snare, Sub, Clap, Hat).',
+    voices: '16V · 4 Groups',
+    groups: [0, 1, 2, 3],
+    desc: 'Four-channel live techno rig: punchy analog kick (Ch 1), crisp metallic hats (Ch 2), singing saw/PWM leads (Ch 3), and squelchy acid bass (Ch 4).',
   },
   {
     idx: 23,

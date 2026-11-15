@@ -25,8 +25,8 @@ void adrift_synth_init(adrift_synth_t *s) {
         vc->lfo_sh_q15     = dsp_white_noise_q15(&vc->lfo_rng);
         vc->lfo2_sh_q15    = dsp_white_noise_q15(&vc->lfo_rng);
         vc->lfo3_sh_q15    = dsp_white_noise_q15(&vc->lfo_rng);
-        vc->dry_gain_q15   = 16384;
-        vc->wet_gain_q15   = 16384;
+        vc->dry_gain_q15   = 19777;
+        vc->wet_gain_q15   = 19777;
         vc->grp_gain_l_q15 = 27500;
         vc->grp_gain_r_q15 = 27500;
         adrift_exciter_init(&vc->exc, v);
@@ -392,7 +392,7 @@ static DSP_HOT_RAM void synth_master_out_ram(adrift_synth_t *s,
 
 typedef struct {
     int32_t tot_dep;
-    int32_t pb_q8;
+    int32_t pb_q16;
     int32_t spread_q8;
     int32_t base_vol;
     int32_t super_vco_scale_q15;
@@ -475,7 +475,7 @@ static void render_voice_list(adrift_synth_t *s,
             env1_q15 = (env1_buf[0] + env1_buf[frames - 1u]) >> 1;
         }
 
-        int32_t pb_q8         = gr->pb_q8;
+        int32_t pb_q16        = gr->pb_q16;
         int32_t spread_q8     = gr->spread_q8;
         int32_t semi_q8       = 0;
         int32_t detune_q8     = 0;
@@ -483,7 +483,7 @@ static void render_voice_list(adrift_synth_t *s,
         adrift_synth_compute_stack_slot_voicing(gp, vc->group_slot, spread_q8, &semi_q8, &detune_q8, &slot_gain_q15);
 
         int32_t note_t          = dsp_clamp_i32((int32_t)vc->note + (int32_t)gp->transpose, 0, 127);
-        int32_t center_pitch_q8 = (note_t << 8) + pb_q8;
+        int32_t center_pitch_q8 = note_t << 8;
         int32_t base_pitch_q8   = center_pitch_q8 + semi_q8 + detune_q8;
         /* In SUPER mode, slots 0 (Left) and 1 (Right) form a stereo BBD pair with opposite micro-detune (+-11c max) */
         int32_t super_bbd_det_q8 = (is_super && gp->num_voices > 1u)
@@ -563,7 +563,7 @@ static void render_voice_list(adrift_synth_t *s,
                 vc->exc.impulse_phase = 0u;
             }
             adrift_exciter_prepare_block_q16(&vc->exc, &slot_exc,
-                                             (base_pitch_q8 * 256) + porta_delta_q16, m.vco_pitch_q8,
+                                             (base_pitch_q8 * 256) + porta_delta_q16 + pb_q16, m.vco_pitch_q8,
                                              m.vco_morph, m.vco_pwm, &morph_1023);
             adrift_exciter_process(&vc->exc, &slot_exc, morph_1023, exc_buf, frames);
             if (hold_onset && slot_exc.pluck > 0) {
@@ -611,7 +611,7 @@ static void render_voice_list(adrift_synth_t *s,
                     vw->bbd.slew_pitch_q16    = w_pitch_q16;
                     vw->bbd.pitch_initialized = true;
                     adrift_exciter_prepare_block_q16(&vw->exc, &sub_exc,
-                                                     w_pitch_q16, w_mod.vco_pitch_q8,
+                                                     w_pitch_q16 + pb_q16, w_mod.vco_pitch_q8,
                                                      w_mod.vco_morph, w_mod.vco_pwm, &w_morph);
                     adrift_exciter_process(&vw->exc, &sub_exc, w_morph, wet_buf, frames);
                     if (hold_onset && sub_exc.pluck > 0) {
@@ -647,10 +647,13 @@ static void render_voice_list(adrift_synth_t *s,
         }
 
         /* 2c. 1024-stage Pitch-Tracked BBD Resonator (glide already stepped at start of voice block) */
-        int32_t target_fb_q14 = 0;
+        int32_t target_fb_q14  = 0;
+        int32_t saved_slew_q16 = vc->bbd.slew_pitch_q16;
+        vc->bbd.slew_pitch_q16 = saved_slew_q16 + pb_q16;
         adrift_bbd_prepare_block_ex(&vc->bbd, &bbd_p,
                                     bbd_pitch_q8, m.bbd_pitch_q8,
                                     m.fb_amt, m.fb_lpf + flt_tol, frames, &target_fb_q14, false);
+        vc->bbd.slew_pitch_q16 = saved_slew_q16;
         adrift_bbd_process(&vc->bbd, &bbd_p, target_fb_q14, inlpf_buf, wet_buf, frames);
 
         /* 2d. Dry/Wet Crossfade + Post-BBD Envelope 2 Output VCA + Group/Unison Gain + Stereo Pan */
@@ -668,8 +671,9 @@ static void render_voice_list(adrift_synth_t *s,
              * so high-Q BBD comb filtering does not strip away the detuned companion VCO sidebands */
             dw = 640 + ((dw - 640) >> 2);
         }
-        int32_t target_wet_q15 = (int32_t)dsp_udiv_1023((uint32_t)(dw * 32767));
-        int32_t target_dry_q15 = 32767 - target_wet_q15;
+        int32_t target_dry_q15 = 0;
+        int32_t target_wet_q15 = 0;
+        adrift_synth_dry_wet_gains_q15(dw, &target_dry_q15, &target_wet_q15);
 
         int32_t uni_scale = 32767;
         if (gp->assign_mode == ADRIFT_GROUP_UNISON) {
@@ -733,33 +737,32 @@ static void c1_voice_worker(uint32_t frames) {
                       &g_core_scratch[1]);
 }
 
+static inline int32_t slew_ctrl_exact(int32_t cur, int32_t target, uint32_t frames) {
+    int32_t diff = target - cur;
+    if (diff == 0) {
+        return target;
+    }
+    /* ~4.4 ms de-zippering time constant (tau = 192 samples), monotonic & deadband-free */
+    int32_t f    = (frames > 64u) ? 64 : (int32_t)frames;
+    int32_t num  = diff * f;
+    int32_t step = (num >= 0) ? ((num + 191) / 192) : -(((-num) + 191) / 192);
+    if ((diff > 0 && cur + step > target) || (diff < 0 && cur + step < target)) {
+        return target;
+    }
+    return cur + step;
+}
+
 static void render_subblock(adrift_synth_t *s, int16_t *stereo_out, uint32_t frames) {
     if (frames == 0u) return;
 
-    /* Precompute per-group block invariants once and partition active voices by DSP cost
-     * (SUPER multi-VCO -> Heavy active exciter -> Light BBD ringout) across CPU1 and CPU0.
+    /* Partition active voices by DSP cost (SUPER multi-VCO -> Heavy active exciter -> Light BBD ringout)
+     * across CPU1 and CPU0, and track which groups have sounding voices for controller smoothing.
      * CPU1 receives the extra voice when active count is odd so CPU0 retains headroom for Master FX. */
-    adrift_group_block_prep_t grp_prep[ADRIFT_MAX_GROUPS];
-    for (uint8_t g = 0u; g < ADRIFT_MAX_GROUPS; g++) {
-        const adrift_group_t *gp = &s->groups[g];
-        if (gp->num_voices == 0u) {
-            continue;
-        }
-        const adrift_patch_t *vp = &gp->patch;
-        int32_t at_amt = (int32_t)dsp_udiv_127((uint32_t)gp->aftertouch * 120u);
-        int32_t mw_amt = (int32_t)dsp_udiv_127((uint32_t)gp->mod_wheel *
-                                               (uint32_t)dsp_clamp_i32(vp->mw_depth, 0, 1023));
-        grp_prep[g].tot_dep             = dsp_clamp_i32((int32_t)vp->lfo_depth + (mw_amt >> 1) + at_amt, -512, 512);
-        grp_prep[g].pb_q8               = ((int32_t)gp->pitch_bend_q13 * ((int32_t)vp->pb_range << 8)) >> 13;
-        grp_prep[g].spread_q8           = adrift_detune_to_q8(gp->unison_detune);
-        grp_prep[g].base_vol            = dsp_clamp_i32(vp->master_vol, 0, 1023);
-        grp_prep[g].super_vco_scale_q15 = k_unison_gain_q15[(gp->num_voices + 1u) >> 1];
-    }
-
     uint8_t super_v[ADRIFT_MAX_VOICES];
     uint8_t heavy_v[ADRIFT_MAX_VOICES];
     uint8_t light_v[ADRIFT_MAX_VOICES];
     uint8_t n_super = 0u, n_heavy = 0u, n_light = 0u;
+    bool    grp_active[ADRIFT_MAX_GROUPS] = { false };
 
     for (uint8_t v = 0u; v < ADRIFT_MAX_VOICES; v++) {
         adrift_voice_t *vc = &s->voices[v];
@@ -771,6 +774,7 @@ static void render_subblock(adrift_synth_t *s, int16_t *stereo_out, uint32_t fra
             vc->active = false;
             continue;
         }
+        grp_active[vc->owner_group] = true;
         bool is_super = (gp->assign_mode == ADRIFT_GROUP_SUPER);
         if (is_super && vc->group_slot > 1u) {
             /* Companion oscillators in a SUPER group are summed and stepped by stereo BBD slots 0 and 1 */
@@ -784,6 +788,37 @@ static void render_subblock(adrift_synth_t *s, int16_t *stereo_out, uint32_t fra
         } else {
             light_v[n_light++] = v;
         }
+    }
+
+    adrift_group_block_prep_t grp_prep[ADRIFT_MAX_GROUPS];
+    for (uint8_t g = 0u; g < ADRIFT_MAX_GROUPS; g++) {
+        adrift_group_t *gp = &s->groups[g];
+        int32_t target_pb_q20 = (int32_t)gp->pitch_bend_q13 * 128;
+        int32_t target_mw_q15 = (int32_t)dsp_udiv_127((uint32_t)gp->mod_wheel * 32767u);
+        int32_t target_at_q15 = (int32_t)dsp_udiv_127((uint32_t)gp->aftertouch * 32767u);
+        if (!grp_active[g] || gp->num_voices == 0u) {
+            gp->smooth_pb_q20 = target_pb_q20;
+            gp->smooth_mw_q15 = target_mw_q15;
+            gp->smooth_at_q15 = target_at_q15;
+            if (gp->num_voices == 0u) {
+                continue;
+            }
+        } else {
+            gp->smooth_pb_q20 = slew_ctrl_exact(gp->smooth_pb_q20, target_pb_q20, frames);
+            gp->smooth_mw_q15 = slew_ctrl_exact(gp->smooth_mw_q15, target_mw_q15, frames);
+            gp->smooth_at_q15 = slew_ctrl_exact(gp->smooth_at_q15, target_at_q15, frames);
+        }
+        const adrift_patch_t *vp = &gp->patch;
+        int32_t at_amt    = (gp->smooth_at_q15 * 120 + 16384) >> 15;
+        int32_t mw_amt    = (gp->smooth_mw_q15 * dsp_clamp_i32(vp->mw_depth, 0, 1023) + 16384) >> 15;
+        int32_t extra_dep = (mw_amt >> 1) + at_amt;
+        int32_t base_dep  = (int32_t)vp->lfo_depth;
+        int32_t tot_dep   = (base_dep < 0) ? (base_dep - extra_dep) : (base_dep + extra_dep);
+        grp_prep[g].tot_dep             = dsp_clamp_i32(tot_dep, -512, 512);
+        grp_prep[g].pb_q16              = (gp->smooth_pb_q20 * (int32_t)vp->pb_range) >> 4;
+        grp_prep[g].spread_q8           = adrift_detune_to_q8(gp->unison_detune);
+        grp_prep[g].base_vol            = dsp_clamp_i32(vp->master_vol, 0, 1023);
+        grp_prep[g].super_vco_scale_q15 = k_unison_gain_q15[(gp->num_voices + 1u) >> 1];
     }
 
     uint8_t n_total = (uint8_t)(n_super + n_heavy + n_light);

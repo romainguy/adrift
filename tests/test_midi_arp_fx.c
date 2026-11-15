@@ -68,6 +68,102 @@ void test_midi_protocol(void) {
     CHECK(!s->voices[0].active && s->voices[0].env2.stage == ADRIFT_ENV_IDLE,
           "CC120 All Sound Off did not immediately silence voice");
 
+    /* -4.4 dB equal-loudness Dry/Wet crossfade law across 0..1023 */
+    {
+        int32_t d0 = 0, w0 = 0, d512 = 0, w512 = 0, d1023 = 0, w1023 = 0;
+        adrift_synth_dry_wet_gains_q15(0,    &d0,    &w0);
+        adrift_synth_dry_wet_gains_q15(512,  &d512,  &w512);
+        adrift_synth_dry_wet_gains_q15(1023, &d1023, &w1023);
+        CHECK(d0 == 32767 && w0 == 0 && d1023 == 0 && w1023 == 32767,
+              "Equal-loudness DRYWET endpoints not exact (0->%d/%d, 1023->%d/%d)", d0, w0, d1023, w1023);
+        CHECK(d512 > 19600 && d512 < 19950 && w512 > 19600 && w512 < 19950,
+              "Equal-loudness DRYWET midpoint not ~-4.4 dB (19777): got dry=%d wet=%d", d512, w512);
+        int32_t prev_d = 32768, prev_w = -1;
+        bool mono_ok = true;
+        for (int32_t dw = 0; dw <= 1023; dw++) {
+            int32_t dg = 0, wg = 0;
+            adrift_synth_dry_wet_gains_q15(dw, &dg, &wg);
+            if (dg > prev_d || wg < prev_w || (dg + wg) < 32767) {
+                mono_ok = false;
+            }
+            prev_d = dg;
+            prev_w = wg;
+        }
+        CHECK(mono_ok, "Equal-loudness DRYWET curve violated monotonicity or sum >= 1.0");
+    }
+
+    /* Signed Mod-Wheel / Aftertouch LFO 1 depth: negative lfo_depth must be strengthened, not canceled */
+    {
+        adrift_app_init();
+        adrift_synth_init_patch(s);
+        adrift_group_t *gp = &s->groups[0];
+        (void)adrift_synth_set_group_voices(s, 0u, 1u);
+        gp->patch.in_lpf_cutoff = 750;
+        gp->patch.lfo_wave      = ADRIFT_LFO_SQR;
+        gp->patch.lfo_rate      = 0;
+        gp->patch.lfo_depth     = -200;
+        gp->patch.lfo_dest      = ADRIFT_MOD_IN_LPF;
+        gp->patch.mw_depth      = 800;
+
+        uint8_t av = 0u;
+        for (uint8_t v = 0u; v < ADRIFT_MAX_VOICES; v++) {
+            if (s->voices[v].owner_group == 0) {
+                av = v;
+                break;
+            }
+        }
+        s->voices[av].lfo_phase = 0x10000000u; /* Positive half (+32767) of Square LFO */
+        adrift_synth_handle_midi(s, 0x90u, 60u, 110u);
+        adrift_headless_render(pcm, 64u, NULL, 0u);
+        int16_t cut_mw0 = s->voices[av].in_lpf.last_cutoff;
+
+        /* Raise Mod Wheel + Channel Aftertouch and let controller smoothing settle */
+        adrift_synth_handle_midi(s, 0xB0u, 1u, 127u);
+        adrift_synth_handle_midi(s, 0xD0u, 127u, 0u);
+        s->voices[av].lfo_phase = 0x10000000u;
+        adrift_headless_render(pcm, 2560u, NULL, 0u);
+        s->voices[av].lfo_phase = 0x10000000u;
+        adrift_headless_render(pcm, 64u, NULL, 0u);
+        int16_t cut_mw127 = s->voices[av].in_lpf.last_cutoff;
+        CHECK(cut_mw0 < 600 && cut_mw127 < cut_mw0 - 200,
+              "Mod Wheel / Aftertouch canceled negative lfo_depth instead of strengthening it (mw0=%d, mw127=%d)",
+              (int)cut_mw0, (int)cut_mw127);
+    }
+
+    /* Continuous Pitch-Bend de-zippering while sustaining a note (smooth slew + zero deadband) */
+    {
+        adrift_app_init();
+        adrift_synth_init_patch(s);
+        adrift_group_t *gp = &s->groups[0];
+        (void)adrift_synth_set_group_voices(s, 0u, 1u);
+        gp->patch.lfo_depth = 0;
+        adrift_synth_handle_midi(s, 0x90u, 60u, 115u);
+        adrift_headless_render(pcm, 256u, NULL, 0u);
+        CHECK(gp->smooth_pb_q20 == 0, "Expected initial smooth_pb_q20 == 0");
+
+        /* Step Pitch Bend abruptly to +8191 while voice is active */
+        adrift_midi_msg_t pb_step = { 0xE0u, 0x7Fu, 0x7Fu, 0u };
+        adrift_headless_render(pcm, 64u, &pb_step, 1u);
+        int32_t pb_blk1   = gp->smooth_pb_q20;
+        int32_t pb_target = 8191 * 128;
+        CHECK(pb_blk1 > 0 && pb_blk1 < (pb_target >> 1),
+              "Expected mid-note Pitch Bend step to slew smoothly on block 1 (got %d vs target %d)",
+              pb_blk1, pb_target);
+
+        int32_t prev_pb = pb_blk1;
+        bool monotonic  = true;
+        for (uint32_t b = 0u; b < 48u; b++) {
+            adrift_headless_render(pcm, 64u, NULL, 0u);
+            if (gp->smooth_pb_q20 < prev_pb || gp->smooth_pb_q20 > pb_target) {
+                monotonic = false;
+            }
+            prev_pb = gp->smooth_pb_q20;
+        }
+        CHECK(monotonic && gp->smooth_pb_q20 == pb_target,
+              "Expected deadband-free monotonic Pitch Bend convergence to %d (got %d, mono=%d)",
+              pb_target, gp->smooth_pb_q20, (int)monotonic);
+    }
+
     free(pcm);
     printf("  -> PASS (Vel diff=+%.1f dB, PB +2st err=%.2f cents, CC64/CC74/CC120 OK)\n",
            rms_loud - rms_soft, bend_cents);

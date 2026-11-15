@@ -28,7 +28,7 @@ static const adrift_patch_t k_factory_patches[ADRIFT_NUM_PATCH_TEMPLATES] = {
             .onset_delay = 0, .attack = 8, .decay = 680, .sustain = 900,
             .release = 620, .vel_sens = 320, .loop_mode = ADRIFT_ENV_LOOP_OFF, .drone_hold = false
         },
-        .master_vol = 860,
+        .master_vol = 786,
         .lfo_wave = ADRIFT_LFO_SINE, .lfo_rate = 380, .lfo_depth = 12,
         .lfo_dest = ADRIFT_MOD_BBD_PITCH, .mw_depth = 180, .pb_range = 2, .legato = false
     },
@@ -1432,6 +1432,9 @@ bool adrift_synth_load_preset_group(adrift_synth_t *s,
     gp->pitch_bend_q13 = 0;
     gp->mod_wheel      = 0u;
     gp->aftertouch     = 0u;
+    gp->smooth_pb_q20  = 0;
+    gp->smooth_mw_q15  = 0;
+    gp->smooth_at_q15  = 0;
     gp->sustain_pedal  = false;
     gp->rr_cursor      = 0u;
     gp->mono_len       = 0u;
@@ -1508,6 +1511,9 @@ void adrift_synth_load_preset(adrift_synth_t *s, uint8_t index) {
         gp->pitch_bend_q13 = 0;
         gp->mod_wheel      = 0u;
         gp->aftertouch     = 0u;
+        gp->smooth_pb_q20  = 0;
+        gp->smooth_mw_q15  = 0;
+        gp->smooth_at_q15  = 0;
         gp->sustain_pedal  = false;
         gp->rr_cursor      = 0u;
         gp->mono_len       = 0u;
@@ -1555,6 +1561,9 @@ void adrift_synth_init_group_patch(adrift_synth_t *s, uint8_t g) {
     gp->pitch_bend_q13 = 0;
     gp->mod_wheel      = 0u;
     gp->aftertouch     = 0u;
+    gp->smooth_pb_q20  = 0;
+    gp->smooth_mw_q15  = 0;
+    gp->smooth_at_q15  = 0;
     gp->sustain_pedal  = false;
     gp->rr_cursor      = 0u;
     gp->mono_len       = 0u;
@@ -1600,6 +1609,9 @@ void adrift_synth_init_patch(adrift_synth_t *s) {
         gp->pitch_bend_q13 = 0;
         gp->mod_wheel      = 0u;
         gp->aftertouch     = 0u;
+        gp->smooth_pb_q20  = 0;
+        gp->smooth_mw_q15  = 0;
+        gp->smooth_at_q15  = 0;
         gp->sustain_pedal  = false;
         gp->rr_cursor      = 0u;
         gp->mono_len       = 0u;
@@ -1673,6 +1685,9 @@ void adrift_synth_restore_snapshot(adrift_synth_t *s, const adrift_synth_snapsho
         gp->pitch_bend_q13 = 0;
         gp->mod_wheel      = 0u;
         gp->aftertouch     = 0u;
+        gp->smooth_pb_q20  = 0;
+        gp->smooth_mw_q15  = 0;
+        gp->smooth_at_q15  = 0;
         gp->sustain_pedal  = false;
         gp->rr_cursor      = 0u;
         gp->mono_len       = 0u;

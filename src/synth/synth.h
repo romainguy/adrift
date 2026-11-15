@@ -106,6 +106,30 @@ static inline int32_t adrift_detune_to_cents(int16_t detune_1023) {
     return (int32_t)dsp_udiv_1023((uint32_t)(curve_1023 * 120 + 511)); /* 0..120 cents */
 }
 
+/* -4.4 dB equal-loudness Dry/Wet voice crossfade (Q15: 50/50 blend of quarter-sine equal-power
+ * and linear amplitude laws, matched to partially-correlated VCO + pitch-locked BBD signals) */
+static inline void adrift_synth_dry_wet_gains_q15(int32_t dw_1023,
+                                                  int32_t *out_dry_q15,
+                                                  int32_t *out_wet_q15) {
+    if (dw_1023 <= 0) {
+        *out_dry_q15 = 32767;
+        *out_wet_q15 = 0;
+        return;
+    }
+    if (dw_1023 >= 1023) {
+        *out_dry_q15 = 0;
+        *out_wet_q15 = 32767;
+        return;
+    }
+    int32_t  lin_w = (int32_t)dsp_udiv_1023((uint32_t)dw_1023 * 32767u);
+    int32_t  lin_d = 32767 - lin_w;
+    uint32_t angle = dsp_udiv_1023(((uint32_t)dw_1023 << 16) + 511u) << 14;
+    int32_t  sin_w = dsp_sine_lut_q15(angle);
+    int32_t  sin_d = dsp_sine_lut_q15(0x40000000u - angle);
+    *out_wet_q15   = (lin_w + sin_w + 1) >> 1;
+    *out_dry_q15   = (lin_d + sin_d + 1) >> 1;
+}
+
 #define ADRIFT_ARP_MAX_NOTES 16u
 
 typedef enum {
@@ -214,6 +238,9 @@ typedef struct {
     int16_t            pitch_bend_q13; /* -8192 .. +8191 */
     uint8_t            mod_wheel;      /* 0 .. 127 */
     uint8_t            aftertouch;     /* 0 .. 127 */
+    int32_t            smooth_pb_q20;  /* De-zippered pitch bend: pitch_bend_q13 * 128 */
+    int32_t            smooth_mw_q15;  /* De-zippered mod wheel: 0 .. 32767 */
+    int32_t            smooth_at_q15;  /* De-zippered aftertouch: 0 .. 32767 */
     bool               sustain_pedal;
     uint8_t            rr_cursor;      /* Round-robin cursor within this group's owned voices */
     uint8_t            mono_notes[16]; /* Held-note stack for Unison & 1-voice legato */

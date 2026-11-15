@@ -393,8 +393,10 @@ static uint32_t voice_steal_energy(const adrift_voice_t *vc, const adrift_patch_
                                (uint32_t)(vc->env1.declick_q30 >> 15));
     if (env1_q15 > 32767u) env1_q15 = 32767u;
     uint32_t wet_q15 = (uint32_t)dsp_clamp_i32(vc->bbd.peak_wet_q15, 0, 32767);
-    uint32_t dw      = (uint32_t)dsp_clamp_i32(p->dry_wet, 0, 1023);
-    uint32_t src_q15 = 64u + (((env1_q15 * (1023u - dw)) + (wet_q15 * dw)) >> 10);
+    int32_t  dg_q15  = 0;
+    int32_t  wg_q15  = 0;
+    adrift_synth_dry_wet_gains_q15(p->dry_wet, &dg_q15, &wg_q15);
+    uint32_t src_q15 = 64u + (((env1_q15 * (uint32_t)dg_q15) + (wet_q15 * (uint32_t)wg_q15)) >> 15);
     return (env2_q15 * src_q15) >> 15;
 }
 
@@ -441,6 +443,12 @@ static void trigger_voice_on_ex(adrift_synth_t *s,
         int32_t mix_1023           = dsp_clamp_i32(gp->patch.exc.noise_level, 0, 1023);
         vc->exc.vco_gain_q15       = (int32_t)dsp_udiv_1023((uint32_t)exc_lvl_q15 * (uint32_t)(1023 - mix_1023));
         vc->exc.noise_gain_q15     = (int32_t)dsp_udiv_1023((uint32_t)exc_lvl_q15 * (uint32_t)mix_1023);
+        int32_t init_dw            = dsp_clamp_i32(gp->patch.dry_wet, 0, 1023);
+        if (gp->assign_mode == ADRIFT_GROUP_SUPER && gp->num_voices > 1u &&
+            gp->patch.exc.vco_level > 0 && gp->patch.exc.noise_level < 1023 && init_dw > 640) {
+            init_dw = 640 + ((init_dw - 640) >> 2);
+        }
+        adrift_synth_dry_wet_gains_q15(init_dw, &vc->dry_gain_q15, &vc->wet_gain_q15);
     } else if (!legato && prev_note != note && gp->patch.bbd.glide <= 2 && !gp->patch.env2.drone_hold) {
         /* Stealing an active non-drone voice onto a new pitch without glide:
          * softly release the old BBD tap and start the new string loop cleanly without chirping. */
@@ -554,13 +562,23 @@ void adrift_synth_voice_note_on(adrift_synth_t *s, uint8_t g, uint8_t note, uint
     }
 
     uint8_t v_list[ADRIFT_MAX_VOICES];
-    uint8_t n_owned = 0u;
+    uint8_t n_owned     = 0u;
+    bool    any_audible = false;
     for (uint8_t v = 0; v < ADRIFT_MAX_VOICES; v++) {
         if (s->voices[v].owner_group == (int8_t)g) {
             v_list[n_owned++] = v;
+            if (s->voices[v].active &&
+                (s->voices[v].env2.stage != ADRIFT_ENV_IDLE || gp->patch.env2.drone_hold)) {
+                any_audible = true;
+            }
         }
     }
     if (n_owned == 0u) return;
+    if (!any_audible) {
+        gp->smooth_pb_q20 = (int32_t)gp->pitch_bend_q13 * 128;
+        gp->smooth_mw_q15 = (int32_t)dsp_udiv_127((uint32_t)gp->mod_wheel * 32767u);
+        gp->smooth_at_q15 = (int32_t)dsp_udiv_127((uint32_t)gp->aftertouch * 32767u);
+    }
 
     /* Unison / Super mode (stacks all voices in the group) or 1-voice Mono group */
     if (adrift_group_is_stacked(gp->assign_mode) || n_owned == 1u) {

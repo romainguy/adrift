@@ -667,6 +667,56 @@ void test_bbd_pitch_and_invert(void) {
               "Exciter VCO did not glide in lockstep with BBD (vco=%d, bbd=%d)", vco_p, bbd_p);
     }
 
+    /* 3d) Fractional-delay HF damping uniformity (D = 50.00 integer vs D = 50.50 half-sample) */
+    {
+        double h7_loss_db[2] = { 0.0, 0.0 };
+        for (int half = 0; half < 2; half++) {
+            adrift_bbd_t bbd_eq;
+            adrift_bbd_init(&bbd_eq, 0u);
+            adrift_bbd_params_t eq_p = p->bbd;
+            eq_p.feedback      = 880;
+            eq_p.fb_lpf_cutoff = 960;
+            eq_p.glide         = 0;
+            eq_p.invert        = false;
+            eq_p.bbd_noise     = 0;
+            eq_p.dispersion    = 0;
+
+            double   D_samp = half ? 50.5 : 50.0;
+            double   f_h7   = 7.0 * (ADRIFT_SAMPLE_RATE / D_samp); /* ~6.1-6.2 kHz */
+            int32_t  d_q16  = (int32_t)(D_samp * 65536.0 + 0.5);
+            adrift_onepole_set_cutoff(&bbd_eq.fb_lpf, 960);
+            adrift_onepole_set_alpha(&bbd_eq.aa_lpf, 32767u);
+            adrift_onepole_set_alpha(&bbd_eq.clk_lpf, 32767u);
+            bbd_eq.delay_q16         = d_q16;
+            bbd_eq.target_delay_q16  = d_q16;
+            bbd_eq.delay_initialized = true;
+            bbd_eq.fb_gain_q14       = 16192;
+
+            int32_t in_sig[4096];
+            int32_t wet_sig[4096];
+            for (uint32_t n = 0; n < 4096u; n++) {
+                in_sig[n] = (n < 64u) ? (int32_t)(4096.0 * sin(2.0 * M_PI * f_h7 * (double)n / (double)ADRIFT_SAMPLE_RATE)) : 0;
+            }
+            for (uint32_t base = 0; base < 4096u; base += 64u) {
+                bbd_eq.delay_q16        = d_q16;
+                bbd_eq.target_delay_q16 = d_q16;
+                adrift_bbd_process(&bbd_eq, &eq_p, 16192, in_sig + base, wet_sig + base, 64u);
+            }
+            int16_t mono_st[4096 * 2];
+            for (uint32_t n = 0; n < 4096u; n++) {
+                int16_t s16 = (int16_t)dsp_clamp_i32(wet_sig[n], -32768, 32767);
+                mono_st[n * 2u]      = s16;
+                mono_st[n * 2u + 1u] = s16;
+            }
+            double early_db = goertzel_mag_db(mono_st, 128u,  512u, f_h7);
+            double late_db  = goertzel_mag_db(mono_st, 2628u, 512u, f_h7); /* +2500 samples ~= 50 loop passes */
+            h7_loss_db[half] = early_db - late_db;
+        }
+        CHECK(fabs(h7_loss_db[0] - h7_loss_db[1]) < 1.5,
+              "Fractional-delay HF droop mismatch across 50 passes (D=50.0 loss=%.2f dB vs D=50.5 loss=%.2f dB)",
+              h7_loss_db[0], h7_loss_db[1]);
+    }
+
     /* 4) Unbiased zero-mean thermal noise & MN3101 clock wander */
     adrift_bbd_t bbd_nz;
     adrift_bbd_init(&bbd_nz, 1u);

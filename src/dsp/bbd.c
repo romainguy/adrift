@@ -124,7 +124,7 @@ void adrift_bbd_prepare_block_ex(adrift_bbd_t *bbd,
     int32_t disp_k             = dsp_clamp_i32(p->dispersion, 0, 1023);
 
     const int32_t min_delay_q16 = 4 * 65536;
-    const int32_t max_delay_q16 = (int32_t)(ADRIFT_BBD_BUF_LEN - 5u) * 65536;
+    const int32_t max_delay_q16 = (int32_t)(ADRIFT_BBD_BUF_LEN - 6u) * 65536;
 
     if (!bbd->delay_cache_valid ||
         bbd->last_delay_pitch_q16    != delay_pitch_q16 ||
@@ -300,14 +300,14 @@ DSP_ALWAYS_INLINE void bbd_loop_impl(adrift_bbd_t *bbd,
     int32_t  peak      = bbd->peak_wet_q15 - (bbd->peak_wet_q15 >> 5);
 
     const int32_t min_delay_q16 = 4 * 65536;
-    const int32_t max_delay_q16 = (int32_t)(ADRIFT_BBD_BUF_LEN - 5u) * 65536;
+    const int32_t max_delay_q16 = (int32_t)(ADRIFT_BBD_BUF_LEN - 6u) * 65536;
 
     for (uint32_t i = 0; i < frames; i++) {
         cur_d += d_step;
         fb_g  += fb_step;
         int32_t x_in = in_q15[i];
 
-        /* 1. 1024-stage MOSFET bucket-capacitance C(V) dispersion + 4-point Catmull-Rom fractional read */
+        /* 1. 1024-stage MOSFET bucket-capacitance C(V) dispersion + HF-equalized 4-point Lagrange read */
         int32_t disp_q16 = (prev_fb * (cur_d >> 16)) >> 9;
         if (use_disp) {
             disp_q16 += (x_in * disp_fm_k) >> 3;
@@ -317,19 +317,31 @@ DSP_ALWAYS_INLINE void bbd_loop_impl(adrift_bbd_t *bbd,
         int32_t  f_q11 = (eff_d >> 5) & 0x7FF; /* [0 .. 2047] */
 
         uint32_t i0  = (widx - d_int) & ADRIFT_BBD_BUF_MASK;
+        int32_t  ym2 = buf[(i0 + 2u) & ADRIFT_BBD_BUF_MASK];
         int32_t  ym1 = buf[(i0 + 1u) & ADRIFT_BBD_BUF_MASK];
         int32_t  y0  = buf[i0];
         int32_t  y1  = buf[(i0 - 1u) & ADRIFT_BBD_BUF_MASK];
         int32_t  y2  = buf[(i0 - 2u) & ADRIFT_BBD_BUF_MASK];
+        int32_t  y3  = buf[(i0 - 3u) & ADRIFT_BBD_BUF_MASK];
 
-        int32_t c1_q1 = y1 - ym1;
-        int32_t c2_q1 = (ym1 * 2) - (y0 * 5) + (y1 * 4) - y2;
-        int32_t c3_q1 = (y2 - ym1) + (y0 - y1) * 3;
+        /* Maximally-flat 4-point cubic Lagrange polynomial (6x scaled, pure 32-bit safe) */
+        int32_t c1_6 = (y1 * 6) - (ym1 * 2) - (y0 * 3) - y2;
+        int32_t c2_6 = (ym1 + y1 - (y0 * 2)) * 3;
+        int32_t c3_6 = (y2 - ym1) + (y0 - y1) * 3;
 
-        int32_t acc = (c3_q1 * f_q11) >> 11;
-        acc = ((acc + c2_q1) * f_q11) >> 11;
-        acc = (((acc + c1_q1) * f_q11) + 2048) >> 12;
-        int32_t delayed = y0 + acc;
+        int32_t acc6 = (c3_6 * f_q11) >> 11;
+        acc6 = ((acc6 + c2_6) * f_q11) >> 11;
+        acc6 = ((acc6 + c1_6) * f_q11 + 1024) >> 11;
+        int32_t delayed = y0 + ((acc6 * 5461 + 16384) >> 15);
+
+        /* Zero-phase 4th-difference sin^4(w/2) equalizer matching f = 0..1 HF damping to f = 0.5 */
+        int32_t d4_0    = (ym2 + y2) - ((ym1 + y1) * 4) + (y0 * 6);
+        int32_t d4_1    = (ym1 + y3) - ((y0 + y2) * 4) + (y1 * 6);
+        int32_t d4      = d4_0 + ((((d4_1 - d4_0 + 2) >> 2) * f_q11 + 256) >> 9);
+        int32_t df      = f_q11 - 1024;
+        int32_t k_d4    = (((df * df) >> 10) * 26 + 8) >> 4;
+        int32_t d4_corr = (d4 * k_d4 + 32768) >> 16;
+        delayed -= d4_corr;
 
         /* 2. 1024-stage BBD output reconstruction/CTI filter + bucket-well soft saturator */
         int32_t clk_filtered = bbd_onepole_step(&clk_st, clk_a, delayed);

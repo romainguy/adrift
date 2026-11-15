@@ -137,6 +137,10 @@ void adrift_sr_tick(adrift_screen_reader_t *sr,
 void adrift_sr_mix_line_out(adrift_screen_reader_t *sr,
                             int16_t *stereo_inout,
                             uint32_t frames);
+void adrift_sr_mix_line_out_scaled(adrift_screen_reader_t *sr,
+                                   int16_t *stereo_inout,
+                                   uint32_t frames,
+                                   int32_t master_gain_q15);
 
 /* Process a 27-key panel event (key_idx 0..26) before note mapping.
  * Returns true if the event was consumed as a screen-reader chord (suppress Note-On).

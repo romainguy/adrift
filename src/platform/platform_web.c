@@ -138,8 +138,9 @@ static uint8_t  g_key_chan[27];
 static uint8_t  g_qwerty_note[ADRIFT_WEB_QWERTY_SLOTS];
 static uint8_t  g_qwerty_chan[ADRIFT_WEB_QWERTY_SLOTS];
 
-static uint32_t g_leds_buttons  = 0u;
+static uint32_t g_leds_buttons   = 0u;
 static uint8_t  g_web_boot_frame = 0u;
+static uint8_t  g_audio_rendered = 0u;
 
 static void queue_midi(uint8_t status, uint8_t d1, uint8_t d2) {
     if (g_midi_len < ADRIFT_WEB_MIDI_CAP) {
@@ -242,6 +243,7 @@ WASM_EXPORT void adrift_web_init(void) {
     g_sounding_keys  = 0u;
     g_storage_dirty  = 0u;
     g_web_boot_frame = 0u;
+    g_audio_rendered = 0u;
 
     for (uint32_t e = 0u; e < ADRIFT_NUM_ENC; e++) {
         g_enc_acc[e] = 0;
@@ -258,6 +260,7 @@ WASM_EXPORT void adrift_web_init(void) {
     memset(g_rgba_fb, 0, sizeof(g_rgba_fb));
 
     adrift_app_init();
+    adrift_synth_set_master_pot(adrift_app_get_synth(), g_master_pot, true);
     g_storage_dirty = 0u; /* Clear any boot-recovery write flag */
 }
 
@@ -372,6 +375,7 @@ WASM_EXPORT void adrift_web_set_master_pot(int32_t val_0_1023) {
     if (val_0_1023 < 0) val_0_1023 = 0;
     if (val_0_1023 > 1023) val_0_1023 = 1023;
     g_master_pot = (int16_t)val_0_1023;
+    adrift_synth_set_master_pot(adrift_app_get_synth(), g_master_pot, g_audio_rendered == 0u);
 }
 
 WASM_EXPORT void adrift_web_text_input(uint8_t ascii_char, uint8_t text_cmd) {
@@ -502,6 +506,7 @@ WASM_EXPORT void adrift_web_render_audio(uint32_t frames) {
     if (frames > ADRIFT_WEB_MAX_FRAMES) {
         frames = ADRIFT_WEB_MAX_FRAMES;
     }
+    g_audio_rendered = 1u;
 
     uint32_t done = 0u;
     while (done < frames) {

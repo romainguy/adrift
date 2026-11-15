@@ -611,9 +611,10 @@ void adrift_sr_tick(adrift_screen_reader_t *sr,
     }
 }
 
-void adrift_sr_mix_line_out(adrift_screen_reader_t *sr,
-                            int16_t *stereo_inout,
-                            uint32_t frames) {
+void adrift_sr_mix_line_out_scaled(adrift_screen_reader_t *sr,
+                                   int16_t *stereo_inout,
+                                   uint32_t frames,
+                                   int32_t master_gain_q15) {
     if (!sr || !stereo_inout || frames == 0u) {
         return;
     }
@@ -631,6 +632,9 @@ void adrift_sr_mix_line_out(adrift_screen_reader_t *sr,
         sr->duck_gain_q14 >= 16384u) {
         return;
     }
+
+    int32_t mg_clamped = dsp_clamp_i32(master_gain_q15, 0, 32767);
+    int32_t mg_q15     = (mg_clamped >= 32767) ? 32768 : mg_clamped; /* 0..32768 (unity at 32767) */
 
     uint32_t done = 0u;
     int16_t  sp_mono[64];
@@ -654,9 +658,9 @@ void adrift_sr_mix_line_out(adrift_screen_reader_t *sr,
             }
 
             uint32_t idx = (done + i) * 2u;
-            int32_t  l   = ((int32_t)stereo_inout[idx]     * (int32_t)dg) >> 14;
+            int32_t  l   = ((int32_t)stereo_inout[idx]      * (int32_t)dg) >> 14;
             int32_t  r   = ((int32_t)stereo_inout[idx + 1u] * (int32_t)dg) >> 14;
-            int32_t  sp  = (int32_t)sp_mono[i];
+            int32_t  sp  = ((int32_t)sp_mono[i] * mg_q15) >> 15;
 
             l += sp;
             r += sp;
@@ -672,6 +676,12 @@ void adrift_sr_mix_line_out(adrift_screen_reader_t *sr,
         sr->duck_gain_q14 = dg;
         done += chunk;
     }
+}
+
+void adrift_sr_mix_line_out(adrift_screen_reader_t *sr,
+                            int16_t *stereo_inout,
+                            uint32_t frames) {
+    adrift_sr_mix_line_out_scaled(sr, stereo_inout, frames, 32767);
 }
 
 /* ---- Parameter & Screen Semantic Speech Builders ---- */

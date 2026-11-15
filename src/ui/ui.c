@@ -1344,7 +1344,7 @@ void adrift_ui_step(adrift_ui_t *ui,
             ui->initialized    = false;
         } else {
             if (input->master_pot >= 0) {
-                synth->hw_master_pot = input->master_pot;
+                adrift_synth_set_master_pot(synth, input->master_pot, false);
             }
             draw_boot_frame(ui, synth, fb, dirty);
             ui->boot_frame++;
@@ -1581,7 +1581,7 @@ void adrift_ui_step(adrift_ui_t *ui,
 
     /* 2. Hardware master pot */
     if (input->master_pot >= 0) {
-        synth->hw_master_pot = input->master_pot;
+        adrift_synth_set_master_pot(synth, input->master_pot, false);
     }
 
     /* 3. Handle navigation encoders: SELECT -> Voice Group, PRESETS -> Presets Browser/Save Slot, ALGORITHM -> Scale Browser */

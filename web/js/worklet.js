@@ -40,10 +40,10 @@ class AdriftProcessor extends AudioWorkletProcessor {
     };
 
     const opts = (options && options.processorOptions) || {};
-    this._initWasm(opts.wasmBytes, opts.initialFlash, opts.initialBootFrame);
+    this._initWasm(opts.wasmBytes, opts.initialFlash, opts.initialBootFrame, opts.initialMasterPot);
   }
 
-  async _initWasm(wasmBytes, initialFlash, initialBootFrame) {
+  async _initWasm(wasmBytes, initialFlash, initialBootFrame, initialMasterPot) {
     try {
       const res = await WebAssembly.instantiate(wasmBytes, {});
       const inst = res.instance || res;
@@ -60,6 +60,9 @@ class AdriftProcessor extends AudioWorkletProcessor {
       }
 
       this.exports.adrift_web_init();
+      if (typeof initialMasterPot === 'number' && this.exports.adrift_web_set_master_pot) {
+        this.exports.adrift_web_set_master_pot(initialMasterPot | 0);
+      }
       if (typeof initialBootFrame === 'number' && initialBootFrame > 0 && this.exports.adrift_web_set_boot_frame) {
         this.exports.adrift_web_set_boot_frame(initialBootFrame & 0xff);
       }

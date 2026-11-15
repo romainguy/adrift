@@ -268,6 +268,7 @@ export class AdriftEmulator {
           wasmBytes,
           initialFlash: initialFlashCopy,
           initialBootFrame,
+          initialMasterPot: this.panel ? this.panel.masterPot : 900,
         },
       });
 

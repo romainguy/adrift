@@ -29,6 +29,7 @@ int main(int argc, char **argv) {
     test_user_presets_and_save_ui();
     test_boot_animation();
     test_uac_resampler();
+    test_boot_master_volume();
     run_speech_tests();
 
     if (g_failures > 0) {

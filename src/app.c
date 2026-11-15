@@ -31,7 +31,7 @@ void adrift_app_audio_block(int16_t *stereo_out_interleaved,
 }
 
 void adrift_app_mix_line_out(int16_t *stereo_inout, uint32_t frames) {
-    adrift_sr_mix_line_out(&g_sr, stereo_inout, frames);
+    adrift_sr_mix_line_out_scaled(&g_sr, stereo_inout, frames, g_synth.master_gain_q15);
 }
 
 void adrift_app_tick_ui(const adrift_input_state_t *input,

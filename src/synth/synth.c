@@ -39,6 +39,32 @@ void adrift_synth_init(adrift_synth_t *s) {
     adrift_synth_load_preset(s, 0u);
 }
 
+static inline int32_t master_pot_to_gain_q15(int16_t pot) {
+    if (pot < 0) {
+        return 32767;
+    }
+    return (int32_t)dsp_udiv_1023((uint32_t)dsp_clamp_i32(pot, 0, 1023) * 32767u);
+}
+
+void adrift_synth_set_master_pot(adrift_synth_t *s, int16_t pot_0_1023, bool snap_gain) {
+    if (!s) {
+        return;
+    }
+    if (pot_0_1023 < 0) {
+        s->hw_master_pot = -1;
+        if (snap_gain) {
+            s->master_gain_q15 = 32767;
+        }
+        return;
+    }
+    bool    was_unset = (s->hw_master_pot < 0);
+    int16_t clamped   = (int16_t)dsp_clamp_i32(pot_0_1023, 0, 1023);
+    s->hw_master_pot  = clamped;
+    if (snap_gain || was_unset) {
+        s->master_gain_q15 = master_pot_to_gain_q15(clamped);
+    }
+}
+
 static inline int32_t step_lfo_osc(uint32_t *phase_io,
                                    int32_t *sh_q15_io,
                                    uint32_t *rng_io,
@@ -784,10 +810,8 @@ static void render_subblock(adrift_synth_t *s, int16_t *stereo_out, uint32_t fra
     adrift_fx_process(&s->fx, &s->fx_params, accum_l, accum_r, frames);
 
     /* 3. Hardware Master Pot, polyphonic soft-knee limiter, stereo output & UI scope capture */
-    int32_t target_master = (s->hw_master_pot >= 0)
-                                ? (int32_t)dsp_udiv_1023((uint32_t)dsp_clamp_i32(s->hw_master_pot, 0, 1023) * 32767u)
-                                : 32767;
-    int32_t mg_step = dsp_div_frames_i32(target_master - s->master_gain_q15, frames);
+    int32_t target_master = master_pot_to_gain_q15(s->hw_master_pot);
+    int32_t mg_step       = dsp_div_frames_i32(target_master - s->master_gain_q15, frames);
     DSP_CALL_RAM(synth_master_out_ram)(s, accum_l, accum_r, stereo_out, target_master, mg_step, frames);
 }
 

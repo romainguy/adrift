@@ -1772,3 +1772,165 @@ void test_boot_animation(void) {
     printf("  -> PASS (68 Frames Bit-Exact, MaxDirty=%u, GlideDirty=%u, Seamless Dock & Zero-Delay Play-Through)\n",
            max_inc_dirty, max_glide_dirty);
 }
+
+/* =========================================================================
+ * Test: Power-On MASTER Volume Knob Sync (Zero-Transient Snap, 0..1023 & Speech)
+ * ========================================================================= */
+static void boot_volume_setup_instant_patch(adrift_synth_t *s) {
+    s->groups[0].patch.env1.onset_delay = 0;
+    s->groups[0].patch.env1.attack      = 0;
+    s->groups[0].patch.env2.attack      = 0;
+    s->groups[0].patch.exc.vco_level    = 900;
+    s->groups[0].patch.dry_wet          = 0;
+}
+
+void test_boot_master_volume(void) {
+    printf("[Test 20] Boot Master Volume (Zero-Transient Snap, 0..1023 Range & Line-Out Speech Scaling)...\n");
+    const uint32_t nframes = 2048u;
+    const uint32_t npx     = ADRIFT_SCREEN_W * ADRIFT_SCREEN_H;
+    int16_t  *pcm_1023 = (int16_t *)calloc(nframes * 2u, sizeof(int16_t));
+    int16_t  *pcm_512  = (int16_t *)calloc(nframes * 2u, sizeof(int16_t));
+    int16_t  *pcm_256  = (int16_t *)calloc(nframes * 2u, sizeof(int16_t));
+    int16_t  *pcm_0    = (int16_t *)calloc(nframes * 2u, sizeof(int16_t));
+    uint16_t *fb       = (uint16_t *)calloc(npx, sizeof(uint16_t));
+
+    const adrift_midi_msg_t note_on = { 0x90u, 60u, 120u, 0u };
+
+    /* 1. Boot with MASTER knob at 0 -> exact 0 LSB digital silence from sample 0 of block 0 */
+    adrift_app_init();
+    adrift_synth_t *s = adrift_app_get_synth();
+    boot_volume_setup_instant_patch(s);
+    adrift_synth_set_master_pot(s, 0, true);
+    CHECK(s->hw_master_pot == 0 && s->master_gain_q15 == 0,
+          "Expected boot pot=0 to snap hw_master_pot=0 and master_gain_q15=0 (got pot=%d, gain=%d)",
+          (int)s->hw_master_pot, (int)s->master_gain_q15);
+    memset(pcm_0, 0x5A, nframes * 2u * sizeof(int16_t));
+    adrift_headless_render(pcm_0, 512u, &note_on, 1u);
+    int32_t peak_zero = 0;
+    for (uint32_t i = 0u; i < 512u * 2u; i++) {
+        int32_t v = (pcm_0[i] < 0) ? -(int32_t)pcm_0[i] : (int32_t)pcm_0[i];
+        if (v > peak_zero) peak_zero = v;
+    }
+    CHECK(peak_zero == 0,
+          "Boot with MASTER pot=0 must produce exact 0 LSB on block 0 with zero ramp transient (peak=%d)",
+          (int)peak_zero);
+
+    /* 2. Boot with MASTER knob at 1023, 512, 256 -> proportional gain from sample 0 of DMA block 0 */
+    adrift_app_init();
+    s = adrift_app_get_synth();
+    boot_volume_setup_instant_patch(s);
+    adrift_synth_set_master_pot(s, 1023, true);
+    CHECK(s->master_gain_q15 == 32767, "Expected boot pot=1023 -> master_gain_q15=32767 (got %d)",
+          (int)s->master_gain_q15);
+    adrift_headless_render(pcm_1023, 512u, &note_on, 1u);
+
+    adrift_app_init();
+    s = adrift_app_get_synth();
+    boot_volume_setup_instant_patch(s);
+    adrift_synth_set_master_pot(s, 512, true);
+    adrift_headless_render(pcm_512, 512u, &note_on, 1u);
+
+    adrift_app_init();
+    s = adrift_app_get_synth();
+    boot_volume_setup_instant_patch(s);
+    adrift_synth_set_master_pot(s, 256, true);
+    adrift_headless_render(pcm_256, 512u, &note_on, 1u);
+
+    /* Check the very first 64-frame hardware DMA block (frames 0..64) as well as full 512 frames */
+    double b0_1023  = compute_rms_dbfs(pcm_1023, 0u, 64u);
+    double b0_512   = compute_rms_dbfs(pcm_512,  0u, 64u);
+    double b0_256   = compute_rms_dbfs(pcm_256,  0u, 64u);
+    double all_1023 = compute_rms_dbfs(pcm_1023, 0u, 512u);
+    double all_512  = compute_rms_dbfs(pcm_512,  0u, 512u);
+    double all_256  = compute_rms_dbfs(pcm_256,  0u, 512u);
+
+    CHECK(b0_1023 > -30.0, "Expected strong block-0 output at pot=1023 (got %.2f dBFS)", b0_1023);
+    CHECK(fabs((b0_512 - b0_1023) - (-6.012)) < 0.25 && fabs((all_512 - all_1023) - (-6.012)) < 0.20,
+          "Expected boot pot=512 to be -6.0 dB vs 1023 from block 0 (b0=%.2f dB, all=%.2f dB)",
+          b0_512 - b0_1023, all_512 - all_1023);
+    CHECK(fabs((b0_256 - b0_1023) - (-12.033)) < 0.30 && fabs((all_256 - all_1023) - (-12.033)) < 0.25,
+          "Expected boot pot=256 to be -12.0 dB vs 1023 from block 0 (b0=%.2f dB, all=%.2f dB)",
+          b0_256 - b0_1023, all_256 - all_1023);
+
+    /* 3. First UI tick transition (-1 -> 0..4 low pot range) snaps immediately without ignoring <=4 */
+    adrift_app_init();
+    s = adrift_app_get_synth();
+    adrift_ui_t *ui = adrift_app_get_ui();
+    CHECK(s->hw_master_pot == -1 && s->master_gain_q15 == 32767, "Initial unset pot state");
+    adrift_input_state_t in_low;
+    memset(&in_low, 0, sizeof(in_low));
+    in_low.master_pot = 0; /* Previously treated as -1 by (pot_smooth > 4) */
+    adrift_dirty_t dirty;
+    adrift_dirty_clear(&dirty);
+    adrift_app_tick_ui(&in_low, fb, &dirty);
+    CHECK(ui->boot_active && s->hw_master_pot == 0 && s->master_gain_q15 == 0,
+          "First UI tick with master_pot=0 during boot must snap gain to 0 without dismissing splash (pot=%d, gain=%d)",
+          (int)s->hw_master_pot, (int)s->master_gain_q15);
+
+    /* Subsequent live knob movement updates target while preserving smooth block interpolation */
+    in_low.master_pot = 1023;
+    adrift_dirty_clear(&dirty);
+    adrift_app_tick_ui(&in_low, fb, &dirty);
+    CHECK(s->hw_master_pot == 1023 && s->master_gain_q15 == 0,
+          "Subsequent UI tick knob change must ramp smoothly in audio block rather than zipper-snapping");
+
+    /* Also verify post-boot UI path snaps on first valid low pot value (e.g., pot = 3 <= 4) */
+    adrift_app_init();
+    s  = adrift_app_get_synth();
+    ui = adrift_app_get_ui();
+    adrift_ui_dismiss_boot(ui);
+    in_low.master_pot = 3;
+    adrift_dirty_clear(&dirty);
+    adrift_app_tick_ui(&in_low, fb, &dirty);
+    CHECK(s->hw_master_pot == 3 && s->master_gain_q15 > 0 && s->master_gain_q15 < 128,
+          "Post-boot first UI tick with master_pot=3 must snap low gain immediately (pot=%d, gain=%d)",
+          (int)s->hw_master_pot, (int)s->master_gain_q15);
+
+    /* 4. Line-out / headphone Klatt speech obeys boot MASTER volume (0 = silent, 512 = -6 dB vs 1023) */
+    adrift_app_init();
+    s  = adrift_app_get_synth();
+    ui = adrift_app_get_ui();
+    adrift_screen_reader_t *sr = adrift_app_get_screen_reader();
+    adrift_synth_set_master_pot(s, 0, true);
+    adrift_sr_set_enabled(sr, true, true, ui, s);
+    memset(pcm_0, 0, nframes * 2u * sizeof(int16_t));
+    adrift_app_mix_line_out(pcm_0, nframes);
+    int32_t sp_peak_0 = 0;
+    for (uint32_t i = 0u; i < nframes * 2u; i++) {
+        int32_t v = (pcm_0[i] < 0) ? -(int32_t)pcm_0[i] : (int32_t)pcm_0[i];
+        if (v > sp_peak_0) sp_peak_0 = v;
+    }
+    CHECK(sp_peak_0 == 0, "Expected line-out speech at boot pot=0 to be exact 0 LSB (got peak=%d)",
+          (int)sp_peak_0);
+
+    adrift_app_init();
+    s  = adrift_app_get_synth();
+    ui = adrift_app_get_ui();
+    sr = adrift_app_get_screen_reader();
+    adrift_synth_set_master_pot(s, 1023, true);
+    adrift_sr_set_enabled(sr, true, true, ui, s);
+    memset(pcm_1023, 0, nframes * 2u * sizeof(int16_t));
+    adrift_app_mix_line_out(pcm_1023, nframes);
+
+    adrift_app_init();
+    s  = adrift_app_get_synth();
+    ui = adrift_app_get_ui();
+    sr = adrift_app_get_screen_reader();
+    adrift_synth_set_master_pot(s, 512, true);
+    adrift_sr_set_enabled(sr, true, true, ui, s);
+    memset(pcm_512, 0, nframes * 2u * sizeof(int16_t));
+    adrift_app_mix_line_out(pcm_512, nframes);
+
+    double sp_rms_1023 = compute_rms_dbfs(pcm_1023, 0u, nframes);
+    double sp_rms_512  = compute_rms_dbfs(pcm_512,  0u, nframes);
+    CHECK(sp_rms_1023 > -35.0 && fabs((sp_rms_512 - sp_rms_1023) - (-6.012)) < 0.25,
+          "Expected line-out speech at pot=512 to be -6.0 dB vs pot=1023 (1023=%.2f dBFS, diff=%.2f dB)",
+          sp_rms_1023, sp_rms_512 - sp_rms_1023);
+
+    free(fb);
+    free(pcm_0);
+    free(pcm_256);
+    free(pcm_512);
+    free(pcm_1023);
+    printf("  -> PASS (pot=0 Exact 0 LSB, Block-0 512=-6.0dB / 256=-12.0dB, Low-Pot 0..4 Snap & Speech Scaling)\n");
+}

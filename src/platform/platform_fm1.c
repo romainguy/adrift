@@ -569,6 +569,48 @@ static void update_panel_leds(uint32_t held_notes) {
     }
 }
 
+/* Hardware-timer-bounded SARADC helpers (24 MHz TIMER4 crystal clock).
+ * fm1_adc_read()'s fixed 20,000-iteration loop finishes in ~420 us on AC791N @ 360 MHz (-Os)
+ * when CPU0 is idle at boot, shorter than FM1_ADC_CON_SDK's ~532 us conversion (24 MHz / 96 * 133),
+ * causing boot-time reads to abort and return -1. Polling fm1_ticks() is clock-independent. */
+#define ADC_TIMEOUT_TICKS (5000u * FM1_TICKS_PER_US)
+
+static inline int32_t normalize_master_adc(int32_t raw) {
+    if (raw <= 2)    return 0;
+    if (raw >= 1021) return 1023;
+    return raw;
+}
+
+static int32_t adc_read_sync(uint32_t ch) {
+    fm1_adc_start(ch, FM1_ADC_CON_SDK);
+    uint32_t t0 = fm1_ticks();
+    while (!fm1_adc_done()) {
+        if ((uint32_t)(fm1_ticks() - t0) >= ADC_TIMEOUT_TICKS) {
+            fm1_adc_abort();
+            return -1;
+        }
+    }
+    return (int32_t)fm1_adc_take();
+}
+
+static int32_t sample_boot_master_pot(void) {
+    /* Discard one warm-up conversion to settle SARADC S/H capacitor, then average 4 samples */
+    (void)adc_read_sync(FM1_ADC_MASTER);
+    int32_t  sum   = 0;
+    uint32_t count = 0u;
+    for (uint32_t i = 0u; i < 4u; i++) {
+        int32_t v = adc_read_sync(FM1_ADC_MASTER);
+        if (v >= 0 && v <= 1023) {
+            sum += v;
+            count++;
+        }
+    }
+    if (count == 0u) {
+        return -1;
+    }
+    return normalize_master_adc((int32_t)((uint32_t)(sum + (int32_t)(count >> 1)) / count));
+}
+
 static void app_main(void) {
     /* Bring rails and system clock to M-VAVE stock 360 MHz before flash/audio load */
     for (uint32_t tries = 0; tries < 3u; tries++) {
@@ -585,13 +627,21 @@ static void app_main(void) {
         ota_boot_cleanup();
     }
 
+    /* Configure PB6 (MASTER pot) as high-Z analog input before LCD init so RC settles (~300 ms) */
+    fm1_adc_init();
     fm1_lcd_init();
     fm1_lcd_fill_rect(0, 0, 240, 240, 0x0000u);
     fm1_input_init();
     fm1_led_anim_start(0u);
-    fm1_adc_init();
 
     adrift_app_init();
+
+    /* Sample MASTER volume knob and snap synth master gain before audio DMA starts */
+    int32_t pot_smooth = sample_boot_master_pot();
+    int32_t pot_q4     = (pot_smooth >= 0) ? (pot_smooth << 4) : -1;
+    if (pot_smooth >= 0) {
+        adrift_synth_set_master_pot(adrift_app_get_synth(), (int16_t)pot_smooth, true);
+    }
 
     /* Start second core (CPU1 @ 360 MHz) before audio DMA and TIMER5 interrupts */
     fm1_cpu1_bar_build(0x41445232u);
@@ -608,16 +658,17 @@ static void app_main(void) {
     fm1_irq_enable_all();
     fm1_lcd_backlight(1);
 
-    uint32_t boots_ok      = 0u;
-    uint32_t last_ui_ms    = 0u;
-    uint32_t last_adc_ms   = 0u;
-    uint32_t prev_notes    = 0u;
+    uint32_t boots_ok        = 0u;
+    uint32_t last_ui_ms      = 0u;
+    uint32_t last_adc_ms     = 0u;
+    uint32_t adc_t0          = 0u;
+    uint32_t prev_notes      = 0u;
     uint32_t sounding_keys   = 0u;
     uint32_t prev_log_btn    = 0u;
+    uint8_t  adc_pending     = 0u;
     uint8_t  boot_led_active = 1u;
     uint8_t  key_note[27];
     uint8_t  key_chan[27];
-    int32_t  pot_smooth    = -1;
 
     for (uint32_t k = 0; k < 27u; k++) {
         key_note[k] = 0xFFu;
@@ -630,6 +681,10 @@ static void app_main(void) {
         usb_retry(now);
 
         if (usb.uboot_req) {
+            if (adc_pending) {
+                fm1_adc_abort();
+                adc_pending = 0u;
+            }
             lcd_dma_sync();
             g_boot_guard.pending = 0u;
             g_boot_guard.failed  = 0u;
@@ -641,6 +696,10 @@ static void app_main(void) {
         ota_service();
         if (usb.ota_req) {
             usb.ota_req = 0u;
+            if (adc_pending) {
+                fm1_adc_abort();
+                adc_pending = 0u;
+            }
             lcd_dma_sync();
             adrift_synth_all_notes_off(adrift_app_get_synth(), true);
             audio_silence_buf();
@@ -709,14 +768,32 @@ static void app_main(void) {
             prev_notes = cur_notes;
         }
 
-        /* Smooth hardware MASTER potentiometer at 25 Hz */
-        if (now - last_adc_ms >= 40u) {
-            last_adc_ms = now;
-            int32_t raw_pot = fm1_adc_read(FM1_ADC_MASTER);
-            if (raw_pot >= 0 && raw_pot <= 1023) {
-                if (pot_smooth < 0) pot_smooth = raw_pot;
-                else pot_smooth += (raw_pot - pot_smooth) >> 2;
+        /* Non-blocking hardware MASTER potentiometer poll (~40 Hz, timer-bounded) */
+        if (adc_pending) {
+            if (fm1_adc_done()) {
+                int32_t raw_pot = normalize_master_adc((int32_t)fm1_adc_take());
+                adc_pending = 0u;
+                last_adc_ms = now;
+                if (pot_q4 < 0) {
+                    pot_q4 = raw_pot << 4;
+                } else {
+                    int32_t diff_q4 = (raw_pot << 4) - pot_q4;
+                    if (diff_q4 != 0) {
+                        int32_t step = diff_q4 >> 2;
+                        if (step == 0) step = (diff_q4 > 0) ? 1 : -1;
+                        pot_q4 += step;
+                    }
+                }
+                pot_smooth = (pot_q4 + 8) >> 4;
+            } else if ((uint32_t)(fm1_ticks() - adc_t0) >= ADC_TIMEOUT_TICKS) {
+                fm1_adc_abort();
+                adc_pending = 0u;
+                last_adc_ms = now;
             }
+        } else if (now - last_adc_ms >= 25u) {
+            fm1_adc_start(FM1_ADC_MASTER, FM1_ADC_CON_SDK);
+            adc_t0      = fm1_ticks();
+            adc_pending = 1u;
         }
 
         /* UI & LED refresh at ~60 Hz (16 ms) with dirty-band SPI blitting */
@@ -736,8 +813,7 @@ static void app_main(void) {
             in_st.buttons_pressed  = log_btn & ~prev_log_btn;
             in_st.buttons_released = prev_log_btn & ~log_btn;
             prev_log_btn           = log_btn;
-            /* In fm1-live headless bench mode, ADC reads 0 unless set: only apply pot if > 4 */
-            in_st.master_pot       = (pot_smooth > 4) ? (int16_t)pot_smooth : -1;
+            in_st.master_pot       = (pot_smooth >= 0) ? (int16_t)pot_smooth : -1;
             in_st.cpu_load_pct     = g_cpu_pct;
             in_st.text_char        = 0;
             in_st.text_cmd         = ADRIFT_TEXT_CMD_NONE;

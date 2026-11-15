@@ -329,6 +329,7 @@ typedef struct {
 } adrift_synth_t;
 
 void adrift_synth_init(adrift_synth_t *s);
+void adrift_synth_set_master_pot(adrift_synth_t *s, int16_t pot_0_1023, bool snap_gain);
 void adrift_synth_load_preset(adrift_synth_t *s, uint8_t index);
 void adrift_synth_init_patch(adrift_synth_t *s);
 void adrift_synth_init_group_patch(adrift_synth_t *s, uint8_t g);

@@ -205,16 +205,17 @@ DSP_NOINLINE uint32_t dsp_div_u32_q16(uint32_t num, uint32_t den) {{
 }}
 
 static DSP_NOINLINE uint32_t interp_convex_u32(uint32_t y0, uint32_t y1, uint32_t frac_256) {{
-    /* Parabolic-corrected interpolation for exponential 2^(x/12) tables (< 0.02 cents error) */
+    /* Parabolic-corrected interpolation for exponential 2^(+-x/12) tables (< 0.015 cents error):
+     * midpoint sag / |y1 - y0| = 0.0072198 -> K = round(0.0072198 * 4096) = 30u (at >> 26). */
     if (y1 >= y0) {{
         uint32_t d = y1 - y0;
         uint32_t lin = y0 + (uint32_t)(((uint64_t)d * frac_256) >> 8);
-        uint32_t bow = (uint32_t)(((uint64_t)d * frac_256 * (256u - frac_256) * 19u) >> 26);
+        uint32_t bow = (uint32_t)(((uint64_t)d * frac_256 * (256u - frac_256) * 30u) >> 26);
         return lin - bow;
     }} else {{
         uint32_t d = y0 - y1;
         uint32_t lin = y0 - (uint32_t)(((uint64_t)d * frac_256) >> 8);
-        uint32_t bow = (uint32_t)(((uint64_t)d * frac_256 * (256u - frac_256) * 19u) >> 26);
+        uint32_t bow = (uint32_t)(((uint64_t)d * frac_256 * (256u - frac_256) * 30u) >> 26);
         return lin - bow;
     }}
 }}

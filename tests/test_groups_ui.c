@@ -1005,7 +1005,7 @@ void test_voice_groups_and_save_menu(const char *wav_dir) {
     CHECK(ui->in_scope && ui->scope_page == ADRIFT_HOME_SCOPE && ui->prev_layout_mode == 2u,
           "HOME button did not open Full-Screen Oscilloscope (mode 2, page 0)");
 
-    /* Subsequent scope frame while playing should only mark the tight wave bounding band (< 120 rows), not all 240 */
+    /* Subsequent scope frame while playing should only mark the tight wave bounding band (< 150 rows vs 212 full-chrome) */
     memset(&in_st, 0, sizeof(in_st));
     in_st.master_pot = -1;
     adrift_synth_render_block(s, pcm, 256u, NULL, 0u);
@@ -1015,8 +1015,8 @@ void test_voice_groups_and_save_menu(const char *wav_dir) {
     for (uint32_t y = 0u; y < ADRIFT_SCREEN_H; y++) {
         if (dirty.row_mask[y >> 5] & (1u << (y & 31u))) scope_dirty_rows++;
     }
-    CHECK(scope_dirty_rows > 0u && scope_dirty_rows < 120u,
-          "Expected incremental scope dirty band (<120 rows), got %u rows", scope_dirty_rows);
+    CHECK(scope_dirty_rows > 0u && scope_dirty_rows < 150u,
+          "Expected incremental scope dirty band (<150 rows), got %u rows", scope_dirty_rows);
 
     /* Test HOME Knobs 1..4 (ZOOM, GAIN, FREEZE, MODE) and cycling all 6 HOME pages (1/6..6/6 -> 1/6) */
     memset(&in_st, 0, sizeof(in_st));

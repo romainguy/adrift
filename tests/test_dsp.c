@@ -881,6 +881,40 @@ void test_bbd_pitch_and_invert(void) {
           "2-pole BBD clock filter or CTI ceiling inactive (aa=%u, clk=%u, fb=%u)",
           bbd_nz.aa_lpf.a_q15, bbd_nz.clk_lpf.a_q15, bbd_nz.fb_lpf.a_q15);
 
+    /* 6) Sub-semitone convex parabolic pitch/period LUT accuracy (< 0.02 cents across C1..C8) */
+    {
+        const double fs_exact = 24000000.0 / 544.0;
+        double max_inc_cents  = 0.0;
+        double max_per_cents  = 0.0;
+        double max_fq8_cents  = 0.0;
+        for (int note = 24; note < 108; note++) {
+            for (int frac = 0; frac < 256; frac++) {
+                int32_t pitch_q8 = (note << 8) + frac;
+                double  f_hz     = 440.0 * pow(2.0, (((double)note + (double)frac / 256.0) - 69.0) / 12.0);
+
+                uint32_t inc_u32 = dsp_pitch_to_phase_inc(pitch_q8);
+                double   inc_hz  = ((double)inc_u32 / 4294967296.0) * fs_exact;
+                double   inc_err = fabs(1200.0 * log2(inc_hz / f_hz));
+                if (inc_err > max_inc_cents) max_inc_cents = inc_err;
+
+                uint32_t per_q16 = dsp_pitch_to_period_q16(pitch_q8);
+                double   per_hz  = fs_exact / ((double)per_q16 / 65536.0);
+                double   per_err = fabs(1200.0 * log2(per_hz / f_hz));
+                if (per_err > max_per_cents) max_per_cents = per_err;
+
+                if (note >= 60) {
+                    uint32_t fq8     = dsp_pitch_to_freq_q8(pitch_q8);
+                    double   fq8_hz  = (double)fq8 / 256.0;
+                    double   fq8_err = fabs(1200.0 * log2(fq8_hz / f_hz));
+                    if (fq8_err > max_fq8_cents) max_fq8_cents = fq8_err;
+                }
+            }
+        }
+        CHECK(max_inc_cents < 0.02 && max_per_cents < 0.02 && max_fq8_cents < 0.04,
+              "Sub-semitone LUT bow error exceeded spec (inc=%.4f, per=%.4f, fq8=%.4f cents)",
+              max_inc_cents, max_per_cents, max_fq8_cents);
+    }
+
     free(pcm);
     printf("  -> PASS (Max C2-C5 error=%.2f cents, Invert C3=%.2f cents, H1-H2=+%.1f dB, Glide diff=%.3f ST)\n",
            max_abs_cents, inv_cents, odd_h1 - even_h2, slew_diff_st);

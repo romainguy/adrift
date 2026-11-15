@@ -649,6 +649,56 @@ void test_master_fx(void) {
     double flushed_rms = compute_rms_dbfs(pcm, 0u, 1024u);
     CHECK(flushed_rms < -110.0, "Expected Panic to flush FX tail to silence (got %.2f dBFS)", flushed_rms);
 
+    /* Per-stage FX bypass flush: bypassing Delay/Reverb while Compressor remains active must
+     * immediately clear their delay lines so re-enabling them later never leaks ghost tails. */
+    {
+        const uint32_t FN = 4096u;
+        adrift_fx_state_t *fx_fl = (adrift_fx_state_t *)calloc(1u, sizeof(adrift_fx_state_t));
+        int32_t *fl = (int32_t *)calloc(FN, sizeof(int32_t));
+        int32_t *fr = (int32_t *)calloc(FN, sizeof(int32_t));
+        adrift_fx_init(fx_fl);
+        adrift_fx_params_t fp;
+        memset(&fp, 0, sizeof(fp));
+        fp.delay_time  = 180;
+        fp.delay_fb    = 850;
+        fp.delay_mix   = 900;
+        fp.reverb_size = 950;
+        fp.reverb_mix  = 900;
+        fp.comp_mix    = 512; /* Keep Compressor active throughout so any_active stays true! */
+
+        for (uint32_t i = 0u; i < FN; i++) {
+            int32_t v = (int32_t)llround(22000.0 * sin(2.0 * M_PI * 330.0 * (double)i / FS_EXACT));
+            fl[i] = v;
+            fr[i] = v;
+        }
+        adrift_fx_process(fx_fl, &fp, fl, fr, FN);
+
+        /* Bypass Delay & Reverb for 1 block while Compressor stays active */
+        memset(fl, 0, FN * sizeof(int32_t));
+        memset(fr, 0, FN * sizeof(int32_t));
+        fp.delay_mix  = 0;
+        fp.reverb_mix = 0;
+        adrift_fx_process(fx_fl, &fp, fl, fr, 64u);
+
+        /* Re-enable Delay & Reverb on digital silence: output must be exact 0 with zero ghost echo */
+        memset(fl, 0, FN * sizeof(int32_t));
+        memset(fr, 0, FN * sizeof(int32_t));
+        fp.delay_mix  = 900;
+        fp.reverb_mix = 900;
+        adrift_fx_process(fx_fl, &fp, fl, fr, FN);
+        int32_t max_ghost = 0;
+        for (uint32_t i = 0u; i < FN; i++) {
+            if (abs(fl[i]) > max_ghost) max_ghost = abs(fl[i]);
+            if (abs(fr[i]) > max_ghost) max_ghost = abs(fr[i]);
+        }
+        CHECK(max_ghost == 0,
+              "Re-enabling bypassed Delay/Reverb leaked stale ghost tail (max=%d)", max_ghost);
+
+        free(fr);
+        free(fl);
+        free(fx_fl);
+    }
+
     /* 10d. Stereo Bus ("Glue" / Parallel) Soft-Knee Compressor: bypass, dynamic glue, transient attack & GR */
     adrift_synth_load_preset(s, 0u);
     s->fx_params.chorus_mix  = 0;

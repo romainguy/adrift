@@ -449,16 +449,16 @@ static DSP_HOT_RAM int32_t fx_pass_reverb_fdn(adrift_fx_state_t *fx,
         int32_t sin2_l = lfo[i].s2_l;
         int32_t sin2_r = lfo[i].s2_r;
 
-        /* 4 Mutually-Prime Quadrature-Modulated Comb Filters (FDN)
+        /* 4 Mutually-Prime Geometrically-Spaced Comb Filters (1.76:1 spread: 1153, 1399, 1693, 2027)
          * Slow +/- 4.0 sample Q14 LFO modulation smears standing-wave eigenmodes */
         int32_t c_l1 = fx_read_interp_q14(fx->comb_l1, ADRIFT_FX_COMB_MASK, comb_w,
-                                          (1499 << 14) + (sin1_l * 2));
+                                          (1153 << 14) + (sin1_l * 2));
         int32_t c_r1 = fx_read_interp_q14(fx->comb_r1, ADRIFT_FX_COMB_MASK, comb_w,
-                                          (1613 << 14) + (sin1_r * 2));
+                                          (1399 << 14) + (sin1_r * 2));
         int32_t c_l2 = fx_read_interp_q14(fx->comb_l2, ADRIFT_FX_COMB_MASK, comb_w,
-                                          (1777 << 14) + (sin2_l * 2));
+                                          (1693 << 14) + (sin2_l * 2));
         int32_t c_r2 = fx_read_interp_q14(fx->comb_r2, ADRIFT_FX_COMB_MASK, comb_w,
-                                          (1931 << 14) + (sin2_r * 2));
+                                          (2027 << 14) + (sin2_r * 2));
 
         /* Per-comb 1-pole HF damping filter + tiny DC leak (-1/512) to prevent DC buildup */
         damp_l1 += dsp_mul_q15(c_l1 - damp_l1, rvb_damp_q15);
@@ -675,6 +675,12 @@ static DSP_HOT_RAM int32_t fx_pass_comp(adrift_fx_state_t *fx,
     return peak_gr_l2;
 }
 
+static void fx_zero_i16(int16_t *buf, uint32_t len) {
+    for (uint32_t i = 0u; i < len; ++i) {
+        buf[i] = 0;
+    }
+}
+
 void adrift_fx_process(adrift_fx_state_t *fx,
                        const adrift_fx_params_t *params,
                        int32_t *accum_l,
@@ -732,8 +738,8 @@ void adrift_fx_process(adrift_fx_state_t *fx,
     c->delay_wet_q15 = (delay_mix_param << 5);
 
     /* Stage 3: Stereo Diffusion Reverb + Shimmer Tank parameters */
-    /* Decay feedback: 0.40 (13107) .. 0.875 (28672) */
-    c->rvb_fb_q15   = 13107 + ((rvb_size_param * 15565) >> 10);
+    /* Decay feedback: 0.40 (13107) .. 0.930 (30474, ~3.3 s lush hall RT60) */
+    c->rvb_fb_q15   = 13107 + ((rvb_size_param * 17367) >> 10);
     /* HF damping LPF coefficient: 0% damp -> 26000 (bright), 100% damp -> 4500 (warm/dark) */
     c->rvb_damp_q15 = 26000 - ((rvb_damp_param * 21500) >> 10);
     /* Shimmer octave-up feed-forward injection gain: 0 .. 28672 (0 .. 87.5%) */
@@ -755,6 +761,63 @@ void adrift_fx_process(adrift_fx_state_t *fx,
     bool has_comp   = (c->comp_wet_q15 > 0);
     bool need_lfo   = (has_chorus || has_delay || has_reverb);
     bool full_quad  = (has_chorus || has_reverb);
+
+    /* Flush individual bypassed FX stage buffers immediately even when other FX stages remain active */
+    if (has_chorus) {
+        fx->chorus_dirty = true;
+    } else if (fx->chorus_dirty) {
+        fx_zero_i16(fx->chorus_l, ADRIFT_FX_CHORUS_LEN);
+        fx_zero_i16(fx->chorus_r, ADRIFT_FX_CHORUS_LEN);
+        fx->chorus_w    = 0u;
+        fx->chorus_lp_l = 0;
+        fx->chorus_lp_r = 0;
+        fx->chorus_dirty = false;
+    }
+
+    if (has_delay) {
+        fx->delay_dirty = true;
+    } else if (fx->delay_dirty) {
+        fx_zero_i16(fx->delay_l, ADRIFT_FX_DELAY_LEN);
+        fx_zero_i16(fx->delay_r, ADRIFT_FX_DELAY_LEN);
+        fx->delay_w            = 0u;
+        fx->delay_lp_l         = 0;
+        fx->delay_lp_r         = 0;
+        fx->delay_dc_x_l       = 0;
+        fx->delay_dc_y_l       = 0;
+        fx->delay_dc_x_r       = 0;
+        fx->delay_dc_y_r       = 0;
+        fx->meter_delay_env_q15= 0;
+        fx->delay_dirty        = false;
+    }
+
+    if (has_reverb) {
+        fx->reverb_dirty = true;
+    } else if (fx->reverb_dirty) {
+        fx_zero_i16(fx->ap_in1, ADRIFT_FX_AP1_LEN);
+        fx_zero_i16(fx->ap_in2, ADRIFT_FX_AP2_LEN);
+        fx_zero_i16(fx->comb_l1, ADRIFT_FX_COMB_LEN);
+        fx_zero_i16(fx->comb_r1, ADRIFT_FX_COMB_LEN);
+        fx_zero_i16(fx->comb_l2, ADRIFT_FX_COMB_LEN);
+        fx_zero_i16(fx->comb_r2, ADRIFT_FX_COMB_LEN);
+        fx_zero_i16(fx->ap_out_l, ADRIFT_FX_AP2_LEN);
+        fx_zero_i16(fx->ap_out_r, ADRIFT_FX_AP2_LEN);
+        fx_zero_i16(fx->shimmer_buf, ADRIFT_FX_SHIMMER_LEN);
+        fx->ap_in1_w            = 0u;
+        fx->ap_in2_w            = 0u;
+        fx->reverb_in_lp        = 0;
+        fx->comb_w              = 0u;
+        fx->comb_damp_l1        = 0;
+        fx->comb_damp_r1        = 0;
+        fx->comb_damp_l2        = 0;
+        fx->comb_damp_r2        = 0;
+        fx->ap_out_w            = 0u;
+        fx->shimmer_w           = 0u;
+        fx->shimmer_lp          = 0;
+        fx->shimmer_dc_x        = 0;
+        fx->shimmer_dc_y        = 0;
+        fx->meter_reverb_env_q15= 0;
+        fx->reverb_dirty        = false;
+    }
 
     int32_t  peak_delay  = 0;
     int32_t  peak_reverb = 0;

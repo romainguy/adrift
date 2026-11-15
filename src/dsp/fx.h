@@ -108,6 +108,9 @@ typedef struct {
     int32_t  meter_comp_gr_q15;
     uint32_t clk_period_q4; /* >0 when synced to external 24 PPQN MIDI clock */
     bool     buffers_dirty;
+    bool     chorus_dirty;
+    bool     delay_dirty;
+    bool     reverb_dirty;
 } adrift_fx_state_t;
 
 void adrift_fx_init(adrift_fx_state_t *fx);

@@ -7,6 +7,7 @@ void adrift_synth_init(adrift_synth_t *s) {
     }
     s->hw_master_pot   = -1;
     s->master_gain_q15 = 32767;
+    s->dither_rng      = 0xD17E5A3Cu;
     s->last_note       = 60u;
     s->edit_group      = 0u;
     s->midi_clk_bpm    = 120u;
@@ -236,16 +237,43 @@ static int32_t step_voice_lfos_and_accum(adrift_voice_t *vc,
     return lfo1_q15;
 }
 
-/* Smooth C1-continuous rational soft-knee limiter above -2.5 dBFS (24576) */
-DSP_ALWAYS_INLINE int16_t master_soft_clip_s16(int32_t y) {
-    if (y >= -24576 && y <= 24576) {
-        return (int16_t)y;
+/* Exact 32-bit split Q15 master pot scaling on clamped Q23 bus ([-67108864, +67108864]) */
+DSP_ALWAYS_INLINE int32_t master_mul_gain_q23(int32_t acc_q23, int32_t mg_q15) {
+    int32_t acc  = dsp_clamp_i32(acc_q23, -67108864, 67108864);
+    int32_t mg15 = (mg_q15 >= 32767) ? 32768 : dsp_clamp_i32(mg_q15, 0, 32767);
+    if (acc == 0 || mg15 == 0) {
+        return 0;
+    }
+    int32_t acc_hi  = acc >> 12; /* [-16384, +16384] */
+    int32_t acc_lo  = acc & 4095;
+    int32_t prod_hi = acc_hi * mg15;
+    int32_t prod_lo = acc_lo * mg15;
+    return (prod_hi >> 3) + ((prod_lo + ((prod_hi & 7) << 12) + 16384) >> 15);
+}
+
+/* Smooth C1-continuous rational soft-knee limiter in Q23 above -2.5 dBFS (6,291,456 -> 8,388,607) */
+DSP_ALWAYS_INLINE int32_t master_soft_clip_q23(int32_t y) {
+    if (y >= -6291456 && y <= 6291456) {
+        return y;
     }
     int32_t  ay = (y < 0) ? -y : y;
-    uint32_t d  = (uint32_t)(ay - 24576);
-    if (d > 262144u) d = 262144u;
-    int32_t out = 24576 + (int32_t)((8191u * d) / (8191u + d));
-    return (int16_t)((y < 0) ? -out : out);
+    uint32_t d  = (uint32_t)(ay - 6291456);
+    if (d > 65011712u) d = 65011712u;
+    uint32_t den  = 2097152u + d;
+    uint32_t n1   = d << 5;
+    uint32_t q1   = n1 / den;
+    uint32_t r1   = n1 - q1 * den;
+    uint32_t n2   = r1 << 5;
+    uint32_t q2   = n2 / den;
+    uint32_t r2   = n2 - q2 * den;
+    uint32_t n3   = r2 << 5;
+    uint32_t q3   = n3 / den;
+    uint32_t r3   = n3 - q3 * den;
+    uint32_t q4   = (r3 << 6) / den;
+    int32_t  frac = (int32_t)((q1 << 16) + (q2 << 11) + (q3 << 6) + q4);
+    int32_t  out  = 6291456 + frac;
+    if (out > 8388607) out = 8388607;
+    return (y < 0) ? -out : out;
 }
 
 typedef struct {
@@ -276,10 +304,29 @@ static DSP_HOT_RAM void synth_exc_vca_ram(int32_t *exc_buf,
     }
 }
 
+/* Overflow-free 32-bit voice VCA + group/pan scale producing full 24-bit signed Q23 */
+DSP_ALWAYS_INLINE int32_t voice_mix_scale_q23(int32_t mixed, int32_t e2_q23, int32_t grp_g) {
+    if (mixed == 0 || e2_q23 <= 0 || grp_g <= 0) {
+        return 0;
+    }
+    int32_t mx    = dsp_clamp_i32(mixed, -46340, 46340);
+    int32_t gg    = dsp_clamp_i32(grp_g, 0, 60000);
+    int32_t e2_hi = e2_q23 >> 8;  /* 0..32768 */
+    int32_t e2_lo = e2_q23 & 255; /* 0..255 */
+    int32_t p_hi  = e2_hi * gg;
+    int32_t p_lo  = e2_lo * gg;
+    int32_t g_q22 = (p_hi >> 8) + ((p_lo + ((p_hi & 255) << 8) + 32768) >> 16);
+    int32_t gl_hi = g_q22 >> 9;   /* 0..30000 */
+    int32_t gl_lo = g_q22 & 511;  /* 0..511 */
+    int32_t m_hi  = mx * gl_hi;
+    int32_t m_lo  = mx * gl_lo;
+    return (m_hi >> 5) + ((m_lo + ((m_hi & 31) << 9) + 8192) >> 14);
+}
+
 static DSP_HOT_RAM void synth_mix_voice_ram(const synth_mix_gains_t *g,
                                             const int32_t *inlpf_buf,
                                             const int32_t *wet_buf,
-                                            const int32_t *env2_buf,
+                                            const int32_t *env2_q23_buf,
                                             int32_t *accum_l,
                                             int32_t *accum_r,
                                             uint32_t frames,
@@ -293,11 +340,13 @@ static DSP_HOT_RAM void synth_mix_voice_ram(const synth_mix_gains_t *g,
 
     if (inlpf_zero) {
         if ((wet_step | grp_l_step | grp_r_step) == 0) {
+            bool mono = (grp_gl == grp_gr);
             for (uint32_t i = 0; i < frames; i++) {
                 int32_t mixed = dsp_mul_q15(wet_buf[i], wet_g);
-                int32_t vout  = dsp_mul_q15(mixed, env2_buf[i]);
-                accum_l[i]   += dsp_mul_q15(vout, grp_gl);
-                accum_r[i]   += dsp_mul_q15(vout, grp_gr);
+                int32_t e2    = env2_q23_buf[i];
+                int32_t ol    = voice_mix_scale_q23(mixed, e2, grp_gl);
+                accum_l[i]   += ol;
+                accum_r[i]   += mono ? ol : voice_mix_scale_q23(mixed, e2, grp_gr);
             }
         } else {
             for (uint32_t i = 0; i < frames; i++) {
@@ -305,20 +354,23 @@ static DSP_HOT_RAM void synth_mix_voice_ram(const synth_mix_gains_t *g,
                 grp_gl += grp_l_step;
                 grp_gr += grp_r_step;
                 int32_t mixed = dsp_mul_q15(wet_buf[i], wet_g);
-                int32_t vout  = dsp_mul_q15(mixed, env2_buf[i]);
-                accum_l[i]   += dsp_mul_q15(vout, grp_gl);
-                accum_r[i]   += dsp_mul_q15(vout, grp_gr);
+                int32_t e2    = env2_q23_buf[i];
+                int32_t ol    = voice_mix_scale_q23(mixed, e2, grp_gl);
+                accum_l[i]   += ol;
+                accum_r[i]   += (grp_gl == grp_gr) ? ol : voice_mix_scale_q23(mixed, e2, grp_gr);
             }
         }
     } else {
         int32_t dry_g    = g->dry_g;
         int32_t dry_step = g->dry_step;
         if ((dry_step | wet_step | grp_l_step | grp_r_step) == 0) {
+            bool mono = (grp_gl == grp_gr);
             for (uint32_t i = 0; i < frames; i++) {
                 int32_t mixed = dsp_mul_q15(inlpf_buf[i], dry_g) + dsp_mul_q15(wet_buf[i], wet_g);
-                int32_t vout  = dsp_mul_q15(mixed, env2_buf[i]);
-                accum_l[i]   += dsp_mul_q15(vout, grp_gl);
-                accum_r[i]   += dsp_mul_q15(vout, grp_gr);
+                int32_t e2    = env2_q23_buf[i];
+                int32_t ol    = voice_mix_scale_q23(mixed, e2, grp_gl);
+                accum_l[i]   += ol;
+                accum_r[i]   += mono ? ol : voice_mix_scale_q23(mixed, e2, grp_gr);
             }
         } else {
             for (uint32_t i = 0; i < frames; i++) {
@@ -327,9 +379,10 @@ static DSP_HOT_RAM void synth_mix_voice_ram(const synth_mix_gains_t *g,
                 grp_gl += grp_l_step;
                 grp_gr += grp_r_step;
                 int32_t mixed = dsp_mul_q15(inlpf_buf[i], dry_g) + dsp_mul_q15(wet_buf[i], wet_g);
-                int32_t vout  = dsp_mul_q15(mixed, env2_buf[i]);
-                accum_l[i]   += dsp_mul_q15(vout, grp_gl);
-                accum_r[i]   += dsp_mul_q15(vout, grp_gr);
+                int32_t e2    = env2_q23_buf[i];
+                int32_t ol    = voice_mix_scale_q23(mixed, e2, grp_gl);
+                accum_l[i]   += ol;
+                accum_r[i]   += (grp_gl == grp_gr) ? ol : voice_mix_scale_q23(mixed, e2, grp_gr);
             }
         }
     }
@@ -346,13 +399,13 @@ static DSP_HOT_RAM void synth_sum_cores_ram(int32_t *accum_l,
     }
 }
 
-static DSP_HOT_RAM void synth_master_out_ram(adrift_synth_t *s,
-                                             const int32_t *accum_l,
-                                             const int32_t *accum_r,
-                                             int16_t *stereo_out,
-                                             int32_t target_master,
-                                             int32_t mg_step,
-                                             uint32_t frames) {
+static DSP_HOT_RAM void synth_master_out_q23_ram(adrift_synth_t *s,
+                                                 const int32_t *accum_l,
+                                                 const int32_t *accum_r,
+                                                 int32_t *stereo_q23_out,
+                                                 int32_t target_master,
+                                                 int32_t mg_step,
+                                                 uint32_t frames) {
     int32_t mg     = s->master_gain_q15;
     int32_t peak   = s->peak_out_q15 - (s->peak_out_q15 >> 5);
     uint8_t swr    = s->scope_wr;
@@ -360,19 +413,18 @@ static DSP_HOT_RAM void synth_master_out_ram(adrift_synth_t *s,
 
     for (uint32_t i = 0; i < frames; i++) {
         mg += mg_step;
-        int32_t acc_l  = dsp_clamp_i32(accum_l[i], -262144, 262144);
-        int32_t acc_r  = dsp_clamp_i32(accum_r[i], -262144, 262144);
-        int32_t mg_q12 = (mg + 1) >> 3; /* 0..4096: overflow-free with 16-voice sum */
-        int32_t yl     = (acc_l * mg_q12) >> 12;
-        int32_t yr     = (acc_r * mg_q12) >> 12;
-        int16_t s16_l  = master_soft_clip_s16(yl);
-        int16_t s16_r  = master_soft_clip_s16(yr);
-        stereo_out[2u * i]      = s16_l;
-        stereo_out[2u * i + 1u] = s16_r;
+        int32_t yl    = master_mul_gain_q23(accum_l[i], mg);
+        int32_t yr    = master_mul_gain_q23(accum_r[i], mg);
+        int32_t q23_l = master_soft_clip_q23(yl);
+        int32_t q23_r = master_soft_clip_q23(yr);
+        stereo_q23_out[2u * i]      = q23_l;
+        stereo_q23_out[2u * i + 1u] = q23_r;
 
-        int32_t ay_l = s16_l < 0 ? -(int32_t)s16_l : (int32_t)s16_l;
-        int32_t ay_r = s16_r < 0 ? -(int32_t)s16_r : (int32_t)s16_r;
-        int32_t ay   = (ay_l > ay_r) ? ay_l : ay_r;
+        int16_t s16_l = dsp_sat16((q23_l + 128) >> 8);
+        int16_t s16_r = dsp_sat16((q23_r + 128) >> 8);
+        int32_t ay_l  = s16_l < 0 ? -(int32_t)s16_l : (int32_t)s16_l;
+        int32_t ay_r  = s16_r < 0 ? -(int32_t)s16_r : (int32_t)s16_r;
+        int32_t ay    = (ay_l > ay_r) ? ay_l : ay_r;
         if (ay > peak) peak = ay;
 
         /* Decimate by 4 (~11 kHz) into 128-sample UI scope ring (~11.6 ms window) */
@@ -660,7 +712,7 @@ static void render_voice_list(adrift_synth_t *s,
         bool env2_active = (vc->env2.stage != ADRIFT_ENV_IDLE || vp->env2.drone_hold);
         if (env2_active) {
             adrift_env_update_coefs(&vc->env2, &vp->env2);
-            adrift_env_process(&vc->env2, &vp->env2, env2_buf, frames);
+            adrift_env_process_q23(&vc->env2, &vp->env2, env2_buf, frames);
         } else {
             vc->env2.level_q30 = 0;
         }
@@ -752,7 +804,7 @@ static inline int32_t slew_ctrl_exact(int32_t cur, int32_t target, uint32_t fram
     return cur + step;
 }
 
-static void render_subblock(adrift_synth_t *s, int16_t *stereo_out, uint32_t frames) {
+static void render_subblock_q23(adrift_synth_t *s, int32_t *stereo_q23_out, uint32_t frames) {
     if (frames == 0u) return;
 
     /* Partition active voices by DSP cost (SUPER multi-VCO -> Heavy active exciter -> Light BBD ringout)
@@ -871,23 +923,91 @@ static void render_subblock(adrift_synth_t *s, int16_t *stereo_out, uint32_t fra
         DSP_CALL_RAM(synth_sum_cores_ram)(accum_l, accum_r, g_core_scratch[1].accum_l, g_core_scratch[1].accum_r, frames);
     }
 
-    /* 2b. Master Stereo Bus / Send Effects (Chorus -> Ping-Pong Delay -> Shimmer Reverb) */
+    /* 2b. Master Stereo Bus / Send Effects (Chorus -> Ping-Pong Delay -> Shimmer Reverb)
+     * Preserve full 24-bit Q23 sub-LSB dry resolution across FX stages and parallel bus compression. */
     s->fx.clk_period_q4 = s->midi_clk_active ? s->midi_clk_period_q4 : 0u;
-    adrift_fx_process(&s->fx, &s->fx_params, accum_l, accum_r, frames);
+    if (adrift_fx_is_active(&s->fx_params)) {
+        int32_t *fx_l  = g_core_scratch[0].exc_buf;
+        int32_t *fx_r  = g_core_scratch[0].env1_buf;
+        int32_t *res_l = g_core_scratch[0].inlpf_buf;
+        int32_t *res_r = g_core_scratch[0].wet_buf;
+        for (uint32_t i = 0u; i < frames; i++) {
+            int32_t ql = dsp_clamp_i32(accum_l[i], -536870912, 536870912);
+            int32_t qr = dsp_clamp_i32(accum_r[i], -536870912, 536870912);
+            int32_t sl = (ql + 128) >> 8;
+            int32_t sr = (qr + 128) >> 8;
+            fx_l[i]    = sl;
+            fx_r[i]    = sr;
+            res_l[i]   = ql - sl * 256;
+            res_r[i]   = qr - sr * 256;
+        }
+        adrift_fx_process(&s->fx, &s->fx_params, fx_l, fx_r, frames);
+        int32_t comp_mix = dsp_clamp_i32(s->fx_params.comp_mix, 0, 1023);
+        if (comp_mix > 0) {
+            int32_t wet_q15   = (int32_t)dsp_udiv_1023((uint32_t)comp_mix * 32768u);
+            int32_t eff_g_q14 = 16384 + (((s->fx.comp_gain_q14 - 16384) * wet_q15) >> 15);
+            for (uint32_t i = 0u; i < frames; i++) {
+                int32_t fl = dsp_clamp_i32(fx_l[i], -4194304, 4194304);
+                int32_t fr = dsp_clamp_i32(fx_r[i], -4194304, 4194304);
+                accum_l[i] = fl * 256 + ((res_l[i] * eff_g_q14 + 8192) >> 14);
+                accum_r[i] = fr * 256 + ((res_r[i] * eff_g_q14 + 8192) >> 14);
+            }
+        } else {
+            for (uint32_t i = 0u; i < frames; i++) {
+                int32_t fl = dsp_clamp_i32(fx_l[i], -4194304, 4194304);
+                int32_t fr = dsp_clamp_i32(fx_r[i], -4194304, 4194304);
+                accum_l[i] = fl * 256 + res_l[i];
+                accum_r[i] = fr * 256 + res_r[i];
+            }
+        }
+    } else if (s->fx.buffers_dirty || s->fx.chorus_dirty || s->fx.delay_dirty || s->fx.reverb_dirty) {
+        adrift_fx_process(&s->fx, &s->fx_params, g_core_scratch[0].exc_buf, g_core_scratch[0].env1_buf, frames);
+    }
 
-    /* 3. Hardware Master Pot, polyphonic soft-knee limiter, stereo output & UI scope capture */
+    /* 3. Hardware Master Pot, polyphonic Q23 soft-knee limiter, stereo Q23 output & UI scope capture */
     int32_t target_master = master_pot_to_gain_q15(s->hw_master_pot);
     int32_t mg_step       = dsp_div_frames_i32(target_master - s->master_gain_q15, frames);
-    DSP_CALL_RAM(synth_master_out_ram)(s, accum_l, accum_r, stereo_out, target_master, mg_step, frames);
+    DSP_CALL_RAM(synth_master_out_q23_ram)(s, accum_l, accum_r, stereo_q23_out, target_master, mg_step, frames);
 }
 
-void adrift_synth_render_block(adrift_synth_t *s,
-                               int16_t *stereo_out,
-                               uint32_t frames,
-                               const adrift_midi_msg_t *midi_events,
-                               uint32_t num_midi) {
+/* Zero-gated, zero-DC-bias 1-LSB TPDF dither from 24-bit Q23 to 16-bit PCM for host audio backends */
+static void synth_dither_q23_to_s16(uint32_t *rng_io,
+                                    const int32_t *q23_in,
+                                    int16_t *s16_out,
+                                    uint32_t frames) {
+    uint32_t rng = *rng_io;
+    for (uint32_t i = 0u; i < frames; i++) {
+        int32_t ql = q23_in[2u * i];
+        int32_t qr = q23_in[2u * i + 1u];
+        if (ql == 0 && qr == 0) {
+            s16_out[2u * i]      = 0;
+            s16_out[2u * i + 1u] = 0;
+            continue;
+        }
+        uint32_t r0 = dsp_xorshift32(&rng);
+        int32_t  dl = (int32_t)(r0 & 0xFFu) - (int32_t)((r0 >> 8) & 0xFFu) + 127 + (int32_t)((r0 >> 16) & 1u);
+        int32_t  dr;
+        if (qr == ql) {
+            dr = dl;
+        } else {
+            uint32_t r1 = dsp_xorshift32(&rng);
+            dr = (int32_t)(r1 & 0xFFu) - (int32_t)((r1 >> 8) & 0xFFu) + 127 + (int32_t)((r1 >> 16) & 1u);
+        }
+        s16_out[2u * i]      = (ql == 0) ? 0 : dsp_sat16((ql + dl) >> 8);
+        s16_out[2u * i + 1u] = (qr == 0) ? 0 : dsp_sat16((qr + dr) >> 8);
+    }
+    *rng_io = rng;
+}
+
+static void synth_render_block_impl(adrift_synth_t *s,
+                                    int16_t *stereo_s16_out,
+                                    int32_t *stereo_q23_out,
+                                    uint32_t frames,
+                                    const adrift_midi_msg_t *midi_events,
+                                    uint32_t num_midi) {
     uint32_t cursor = 0u;
     uint32_t ev_idx = 0u;
+    int32_t  q23_sub[2u * ADRIFT_BLOCK_SIZE];
 
     while (cursor < frames) {
         while (ev_idx < num_midi && midi_events[ev_idx].sample_offset <= cursor) {
@@ -914,7 +1034,12 @@ void adrift_synth_render_block(adrift_synth_t *s,
         if (arp_rem > 0u && arp_rem < chunk) {
             chunk = arp_rem;
         }
-        render_subblock(s, stereo_out + (2u * cursor), chunk);
+        if (stereo_q23_out) {
+            render_subblock_q23(s, stereo_q23_out + (2u * cursor), chunk);
+        } else {
+            render_subblock_q23(s, q23_sub, chunk);
+            synth_dither_q23_to_s16(&s->dither_rng, q23_sub, stereo_s16_out + (2u * cursor), chunk);
+        }
         adrift_arp_advance_samples(s, chunk);
         if (s->midi_clk_since_last < 0x0FFFFFFFu) {
             s->midi_clk_since_last += chunk;
@@ -938,4 +1063,20 @@ void adrift_synth_render_block(adrift_synth_t *s,
                                  midi_events[ev_idx].data2);
         ev_idx++;
     }
+}
+
+void adrift_synth_render_block_q23(adrift_synth_t *s,
+                                   int32_t *stereo_q23_out,
+                                   uint32_t frames,
+                                   const adrift_midi_msg_t *midi_events,
+                                   uint32_t num_midi) {
+    synth_render_block_impl(s, 0, stereo_q23_out, frames, midi_events, num_midi);
+}
+
+void adrift_synth_render_block(adrift_synth_t *s,
+                               int16_t *stereo_out,
+                               uint32_t frames,
+                               const adrift_midi_msg_t *midi_events,
+                               uint32_t num_midi) {
+    synth_render_block_impl(s, stereo_out, 0, frames, midi_events, num_midi);
 }

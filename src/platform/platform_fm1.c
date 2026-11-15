@@ -333,22 +333,20 @@ static void render_half(int32_t *dma_out) {
         g_kbd_r++;
     }
 
-    int16_t pcm16[HALF_WORDS];
-    adrift_app_audio_block(pcm16, HALF_FRAMES, events, nev);
+    adrift_app_audio_block_q23(dma_out, HALF_FRAMES, events, nev);
 
-    /* Tap pure un-ducked synth audio for USB Audio Class 1 before headphone speech mixing */
+    /* Tap pure un-ducked 24-bit Q23 synth audio for USB Audio Class 1 before headphone speech mixing */
     if (uac.feed) {
         for (uint32_t i = 0u; i < HALF_WORDS; i++) {
-            g_uac_q23[i] = (int32_t)pcm16[i] * 256;
+            g_uac_q23[i] = dma_out[i];
         }
         uac_tap(g_uac_q23, HALF_FRAMES);
     }
 
-    adrift_app_mix_line_out(pcm16, HALF_FRAMES);
+    adrift_app_mix_line_out_q23(dma_out, HALF_FRAMES);
 
-    /* Convert signed 16-bit PCM -> signed Q23 in low 24 bits (-8388608..8388607) */
-    for (uint32_t i = 0; i < HALF_WORDS; i++) {
-        int32_t q23 = (int32_t)pcm16[i] * 256;
+    for (uint32_t i = 0u; i < HALF_WORDS; i++) {
+        int32_t q23 = dma_out[i];
         if (q23 > FM1_AUDIO_SAMPLE_MAX) q23 = FM1_AUDIO_SAMPLE_MAX;
         if (q23 < FM1_AUDIO_SAMPLE_MIN) q23 = FM1_AUDIO_SAMPLE_MIN;
         dma_out[i] = q23;

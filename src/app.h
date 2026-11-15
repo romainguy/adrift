@@ -12,3 +12,4 @@ adrift_screen_reader_t *adrift_app_get_screen_reader(void);
 
 /* Mix synthesized screen-reader speech into line-out/headphone buffer ONLY (never USB audio out) */
 void adrift_app_mix_line_out(int16_t *stereo_inout, uint32_t frames);
+void adrift_app_mix_line_out_q23(int32_t *stereo_q23_inout, uint32_t frames);

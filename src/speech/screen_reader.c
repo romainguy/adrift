@@ -684,6 +684,80 @@ void adrift_sr_mix_line_out(adrift_screen_reader_t *sr,
     adrift_sr_mix_line_out_scaled(sr, stereo_inout, frames, 32767);
 }
 
+void adrift_sr_mix_line_out_scaled_q23(adrift_screen_reader_t *sr,
+                                       int32_t *stereo_q23_inout,
+                                       uint32_t frames,
+                                       int32_t master_gain_q15) {
+    if (!sr || !stereo_q23_inout || frames == 0u) {
+        return;
+    }
+
+    if (sr->producer_busy == 0u && (sr->tts.active || sr->q_count > 0u)) {
+        if (adrift_klatt_free_frames(&sr->klatt) >= 128u) {
+            sr_pump_internal(sr);
+        }
+    }
+
+    if (!adrift_klatt_is_speaking(&sr->klatt) &&
+        sr->klatt.tail_rem == 0u &&
+        sr->duck_gain_q14 >= 16384u) {
+        return;
+    }
+
+    int32_t mg_clamped = dsp_clamp_i32(master_gain_q15, 0, 32767);
+    int32_t mg_q15     = (mg_clamped >= 32767) ? 32768 : mg_clamped;
+
+    uint32_t done = 0u;
+    int16_t  sp_mono[64];
+    while (done < frames) {
+        uint32_t chunk = frames - done;
+        if (chunk > 64u) chunk = 64u;
+
+        bool     speaking = adrift_klatt_render(&sr->klatt, sp_mono, chunk);
+        uint16_t dg       = sr->duck_gain_q14;
+
+        for (uint32_t i = 0u; i < chunk; i++) {
+            if (speaking) {
+                if (dg > 8192u) {
+                    dg = (dg > 8192u + 32u) ? (uint16_t)(dg - 32u) : 8192u;
+                }
+            } else {
+                if (dg < 16384u) {
+                    dg = (dg + 8u < 16384u) ? (uint16_t)(dg + 8u) : 16384u;
+                }
+            }
+
+            uint32_t idx   = (done + i) * 2u;
+            int32_t  in_l  = dsp_clamp_i32(stereo_q23_inout[idx],      -8388608, 8388607);
+            int32_t  in_r  = dsp_clamp_i32(stereo_q23_inout[idx + 1u], -8388608, 8388607);
+            int32_t  dg_i  = (int32_t)dg;
+            int32_t  l     = ((in_l >> 14) * dg_i) + ((((in_l & 16383) * dg_i) + 8192) >> 14);
+            int32_t  r     = ((in_r >> 14) * dg_i) + ((((in_r & 16383) * dg_i) + 8192) >> 14);
+            int32_t  sp_in = (int32_t)sp_mono[i];
+            int32_t  sp    = (sp_in == 0 || mg_q15 == 0) ? 0 : (((sp_in * mg_q15) + 64) >> 7);
+
+            l += sp;
+            r += sp;
+            if (l > 8388607)  l = 8388607;
+            if (l < -8388608) l = -8388608;
+            if (r > 8388607)  r = 8388607;
+            if (r < -8388608) r = -8388608;
+
+            stereo_q23_inout[idx]      = l;
+            stereo_q23_inout[idx + 1u] = r;
+        }
+
+        sr->duck_gain_q14 = dg;
+        done += chunk;
+    }
+}
+
+void adrift_sr_mix_line_out_q23(adrift_screen_reader_t *sr,
+                                int32_t *stereo_q23_inout,
+                                uint32_t frames) {
+    adrift_sr_mix_line_out_scaled_q23(sr, stereo_q23_inout, frames, 32767);
+}
+
 /* ---- Parameter & Screen Semantic Speech Builders ---- */
 
 static const char *sr_mod_dest_spoken(uint8_t dest) {

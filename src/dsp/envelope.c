@@ -260,8 +260,9 @@ void adrift_env_note_off(adrift_env_t *env, const adrift_env_params_t *p) {
 
 static DSP_HOT_RAM void env_process_stages_ram(adrift_env_t *env,
                                                uint8_t loop,
-                                               int32_t *out_gain_q15,
-                                               uint32_t frames) {
+                                               int32_t *out_gain,
+                                               uint32_t frames,
+                                               uint32_t out_shr) {
     adrift_env_stage_t st = env->stage;
     bool     gate       = env->gate;
     int32_t  vel_q15    = env->vel_scale_q15;
@@ -358,14 +359,14 @@ static DSP_HOT_RAM void env_process_stages_ram(adrift_env_t *env,
             lvl = 0;
         }
 
-        int32_t g_q15 = ((lvl >> 15) * vel_q15) >> 15;
+        int32_t g_q30 = ((lvl >> 15) * vel_q15) + (((lvl & 0x7FFF) * vel_q15) >> 15);
         if (declick > 0) {
-            g_q15 += (declick >> 15);
-            if (g_q15 > 32767) g_q15 = 32767;
+            g_q30 += declick;
             declick -= declick_step;
             if (declick < 0) declick = 0;
         }
-        out_gain_q15[i] = g_q15;
+        if (g_q30 > 1073709056) g_q30 = 1073709056;
+        out_gain[i] = g_q30 >> out_shr;
     }
 
     env->stage            = st;
@@ -375,16 +376,18 @@ static DSP_HOT_RAM void env_process_stages_ram(adrift_env_t *env,
     env->delay_rem        = drem;
 }
 
-void adrift_env_process(adrift_env_t *env,
-                        const adrift_env_params_t *p,
-                        int32_t *out_gain_q15,
-                        uint32_t frames) {
+static void env_process_impl(adrift_env_t *env,
+                             const adrift_env_params_t *p,
+                             int32_t *out_gain,
+                             uint32_t frames,
+                             uint32_t out_shr) {
     env->just_triggered = false;
     if (p->drone_hold) {
         env->level_q30   = ENV_ONE_Q30;
         env->declick_q30 = 0;
+        int32_t full_g   = (out_shr == 7u) ? 8388352 : 32767;
         for (uint32_t i = 0; i < frames; i++) {
-            out_gain_q15[i] = 32767;
+            out_gain[i] = full_g;
         }
         return;
     }
@@ -394,7 +397,7 @@ void adrift_env_process(adrift_env_t *env,
         env->level_q30   = 0;
         env->declick_q30 = 0;
         for (uint32_t i = 0; i < frames; i++) {
-            out_gain_q15[i] = 0;
+            out_gain[i] = 0;
         }
         return;
     }
@@ -404,21 +407,37 @@ void adrift_env_process(adrift_env_t *env,
         env->level_q30 = 0;
         env->delay_rem = drem - frames;
         for (uint32_t i = 0; i < frames; i++) {
-            out_gain_q15[i] = 0;
+            out_gain[i] = 0;
         }
         return;
     }
 
     uint8_t loop = p->loop_mode;
     if (st == ADRIFT_ENV_SUSTAIN && env->gate && loop == ADRIFT_ENV_LOOP_OFF && env->declick_q30 <= 0) {
-        int32_t sus     = env->sus_level_q30;
-        env->level_q30  = sus;
-        int32_t const_g = ((sus >> 15) * env->vel_scale_q15) >> 15;
+        int32_t sus    = env->sus_level_q30;
+        env->level_q30 = sus;
+        int32_t g_q30  = ((sus >> 15) * env->vel_scale_q15) + (((sus & 0x7FFF) * env->vel_scale_q15) >> 15);
+        if (g_q30 > 1073709056) g_q30 = 1073709056;
+        int32_t const_g = g_q30 >> out_shr;
         for (uint32_t i = 0; i < frames; i++) {
-            out_gain_q15[i] = const_g;
+            out_gain[i] = const_g;
         }
         return;
     }
 
-    DSP_CALL_RAM(env_process_stages_ram)(env, loop, out_gain_q15, frames);
+    DSP_CALL_RAM(env_process_stages_ram)(env, loop, out_gain, frames, out_shr);
+}
+
+void adrift_env_process(adrift_env_t *env,
+                        const adrift_env_params_t *p,
+                        int32_t *out_gain_q15,
+                        uint32_t frames) {
+    env_process_impl(env, p, out_gain_q15, frames, 15u);
+}
+
+void adrift_env_process_q23(adrift_env_t *env,
+                            const adrift_env_params_t *p,
+                            int32_t *out_gain_q23,
+                            uint32_t frames) {
+    env_process_impl(env, p, out_gain_q23, frames, 7u);
 }

@@ -84,3 +84,9 @@ void adrift_env_process(adrift_env_t *env,
                         const adrift_env_params_t *p,
                         int32_t *out_gain_q15,
                         uint32_t frames);
+
+/* Render `frames` high-resolution envelope gain values (Q23: 0..8388352) into `out_gain_q23` */
+void adrift_env_process_q23(adrift_env_t *env,
+                            const adrift_env_params_t *p,
+                            int32_t *out_gain_q23,
+                            uint32_t frames);

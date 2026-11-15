@@ -342,9 +342,10 @@ typedef struct {
     uint32_t        midi_clk_timeout_samples; /* Watchdog countdown (2s) before falling back to internal clock */
     uint32_t        midi_clk_pulse_cnt;       /* Monotonic 24 PPQN pulse counter since 0xFA Start */
 
-    /* Hardware master pot & UI telemetry */
+    /* Hardware master pot, 16-bit TPDF dither RNG & UI telemetry */
     int32_t         master_gain_q15;
     int16_t         hw_master_pot; /* -1 = ignore, else 0..1023 hardware pot scale */
+    uint32_t        dither_rng;
     int16_t         scope_ring[ADRIFT_SCOPE_LEN];
     int16_t         scope_ring_l[ADRIFT_SCOPE_LEN];
     int16_t         scope_ring_r[ADRIFT_SCOPE_LEN];
@@ -425,9 +426,14 @@ void adrift_synth_note_on(adrift_synth_t *s, uint8_t note, uint8_t velocity);
 void adrift_synth_note_off(adrift_synth_t *s, uint8_t note);
 void adrift_synth_all_notes_off(adrift_synth_t *s, bool clear_bbd);
 
-/* Render stereo interleaved 16-bit audio with sample-offset MIDI event splitting */
+/* Render stereo interleaved 16-bit (TPDF-dithered) or 24-bit Q23 audio with sample-offset MIDI splitting */
 void adrift_synth_render_block(adrift_synth_t *s,
                                int16_t *stereo_out,
                                uint32_t frames,
                                const adrift_midi_msg_t *midi_events,
                                uint32_t num_midi);
+void adrift_synth_render_block_q23(adrift_synth_t *s,
+                                   int32_t *stereo_q23_out,
+                                   uint32_t frames,
+                                   const adrift_midi_msg_t *midi_events,
+                                   uint32_t num_midi);

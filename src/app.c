@@ -30,8 +30,19 @@ void adrift_app_audio_block(int16_t *stereo_out_interleaved,
     adrift_synth_render_block(&g_synth, stereo_out_interleaved, frames, midi_events, num_midi);
 }
 
+void adrift_app_audio_block_q23(int32_t *stereo_q23_out_interleaved,
+                                uint32_t frames,
+                                const adrift_midi_msg_t *midi_events,
+                                uint32_t num_midi) {
+    adrift_synth_render_block_q23(&g_synth, stereo_q23_out_interleaved, frames, midi_events, num_midi);
+}
+
 void adrift_app_mix_line_out(int16_t *stereo_inout, uint32_t frames) {
     adrift_sr_mix_line_out_scaled(&g_sr, stereo_inout, frames, g_synth.master_gain_q15);
+}
+
+void adrift_app_mix_line_out_q23(int32_t *stereo_q23_inout, uint32_t frames) {
+    adrift_sr_mix_line_out_scaled_q23(&g_sr, stereo_q23_inout, frames, g_synth.master_gain_q15);
 }
 
 void adrift_app_tick_ui(const adrift_input_state_t *input,

@@ -1927,10 +1927,196 @@ void test_boot_master_volume(void) {
           "Expected line-out speech at pot=512 to be -6.0 dB vs pot=1023 (1023=%.2f dBFS, diff=%.2f dB)",
           sp_rms_1023, sp_rms_512 - sp_rms_1023);
 
+    /* 5. 24-bit Q23 audio path sub-16-bit dynamic range, zero-gated TPDF dither & Q23 speech mix */
+    int32_t *q23_ref = (int32_t *)calloc(nframes * 2u, sizeof(int32_t));
+    int32_t *q23_low = (int32_t *)calloc(nframes * 2u, sizeof(int32_t));
+    int32_t *q23_0   = (int32_t *)calloc(nframes * 2u, sizeof(int32_t));
+
+    /* 5a. Exact 0 Q23 LSBs at pot=0 */
+    adrift_app_init();
+    s = adrift_app_get_synth();
+    boot_volume_setup_instant_patch(s);
+    adrift_synth_set_master_pot(s, 0, true);
+    memset(q23_0, 0x5A, nframes * 2u * sizeof(int32_t));
+    adrift_app_audio_block_q23(q23_0, 512u, &note_on, 1u);
+    int32_t q23_peak_0 = 0;
+    for (uint32_t i = 0u; i < 512u * 2u; i++) {
+        int32_t v = (q23_0[i] < 0) ? -q23_0[i] : q23_0[i];
+        if (v > q23_peak_0) q23_peak_0 = v;
+    }
+    CHECK(q23_peak_0 == 0, "Expected Q23 output at pot=0 to be exact 0 Q23 LSB (got %d)", (int)q23_peak_0);
+
+    /* 5b. Compare quiet (~-72 dBFS) Q23 render vs scaled full-level Q23 reference & 16-bit truncation */
+    for (int pass = 0; pass < 2; pass++) {
+        adrift_app_init();
+        s = adrift_app_get_synth();
+        adrift_synth_set_group_voices(s, 0u, 1u);
+        s->groups[0].assign_mode             = ADRIFT_GROUP_ROUND_ROBIN;
+        s->groups[0].pan                     = 0;
+        s->groups[0].stereo_spread           = 0;
+        s->groups[0].patch.exc.wave_morph    = 0; /* Pure sine VCO */
+        s->groups[0].patch.exc.vco_level     = 900;
+        s->groups[0].patch.exc.noise_level   = 0;
+        s->groups[0].patch.exc.pluck         = 0;
+        s->groups[0].patch.in_lpf_cutoff     = 1023;
+        s->groups[0].patch.in_lpf_res        = 0;
+        s->groups[0].patch.dry_wet           = 0;
+        s->groups[0].patch.lfo_depth         = 0;
+        s->groups[0].patch.lfo2_depth        = 0;
+        s->groups[0].patch.lfo3_depth        = 0;
+        s->groups[0].patch.env1.onset_delay  = 0;
+        s->groups[0].patch.env1.attack       = 0;
+        s->groups[0].patch.env1.sustain      = 1023;
+        s->groups[0].patch.env2.attack       = 0;
+        s->groups[0].patch.env2.sustain      = 1023;
+        s->groups[0].patch.master_vol        = (pass == 0) ? 1023 : 8;
+        adrift_synth_set_master_pot(s, (pass == 0) ? 1023 : 32, true);
+        adrift_app_audio_block_q23((pass == 0) ? q23_ref : q23_low, nframes, &note_on, 1u);
+    }
+
+    double num_pow = 0.0, den_pow = 0.0;
+    for (uint32_t i = 256u; i < nframes; i++) {
+        double r = (double)q23_ref[2u * i];
+        double y = (double)q23_low[2u * i];
+        num_pow += r * y;
+        den_pow += r * r;
+    }
+    double k_scale = (den_pow > 0.0) ? (num_pow / den_pow) : 0.0;
+    double sig_pow = 0.0, err_q23_pow = 0.0, err_s16_pow = 0.0;
+    uint32_t sub_lsb_cnt = 0u;
+    for (uint32_t i = 256u; i < nframes; i++) {
+        int32_t ql    = q23_low[2u * i];
+        int32_t absql = (ql < 0) ? -ql : ql;
+        if (absql > 0 && absql < 128) {
+            sub_lsb_cnt++;
+        }
+        double ideal = k_scale * (double)q23_ref[2u * i];
+        double s16_q = (double)(((ql + 128) >> 8) * 256);
+        sig_pow     += ideal * ideal;
+        err_q23_pow += ((double)ql - ideal) * ((double)ql - ideal);
+        err_s16_pow += (s16_q - ideal) * (s16_q - ideal);
+    }
+    double snr_q23_db = 10.0 * log10(sig_pow / (err_q23_pow + 1e-12));
+    double snr_s16_db = 10.0 * log10(sig_pow / (err_s16_pow + 1e-12));
+    CHECK(sub_lsb_cnt > 100u && (snr_q23_db - snr_s16_db) > 35.0,
+          "Expected Q23 path to preserve sub-16-bit waveform steps and gain >35 dB SNR over 16-bit (sub_lsb=%u, Q23=%.1f dB, S16=%.1f dB)",
+          sub_lsb_cnt, snr_q23_db, snr_s16_db);
+
+    /* 5c. Sub-16-bit (~-102 dBFS, |q23| < 96) TPDF dither: resolves signal without dead-zone,
+     * preserves exact L==R on centered mono, and keeps muted hard-left Right channel at exact 0 */
+    adrift_app_init();
+    s = adrift_app_get_synth();
+    memset(&s->fx_params, 0, sizeof(s->fx_params));
+    adrift_synth_set_group_voices(s, 0u, 1u);
+    s->groups[0].pan                    = 0;
+    s->groups[0].stereo_spread          = 0;
+    s->groups[0].patch.exc.wave_morph   = 0;
+    s->groups[0].patch.exc.analog_drift = 0;
+    s->groups[0].patch.exc.vco_level    = 900;
+    s->groups[0].patch.exc.noise_level  = 0;
+    s->groups[0].patch.exc.pluck        = 0;
+    s->groups[0].patch.in_lpf_cutoff    = 1023;
+    s->groups[0].patch.in_lpf_res       = 0;
+    s->groups[0].patch.dry_wet          = 0;
+    s->groups[0].patch.lfo_depth        = 0;
+    s->groups[0].patch.lfo2_depth       = 0;
+    s->groups[0].patch.lfo3_depth       = 0;
+    s->groups[0].patch.env1.onset_delay = 0;
+    s->groups[0].patch.env1.attack      = 0;
+    s->groups[0].patch.env1.sustain     = 1023;
+    s->groups[0].patch.env2.attack      = 0;
+    s->groups[0].patch.env2.sustain     = 1023;
+    s->groups[0].patch.master_vol       = 1;
+    adrift_synth_set_master_pot(s, 8, true);
+    adrift_app_audio_block_q23(q23_low, 64u, &note_on, 1u); /* Settle initial block-0 gain ramp */
+    adrift_app_audio_block_q23(q23_low, nframes, 0, 0u);
+    int32_t sub_q23_peak = 0;
+    double  sub_q23_sum  = 0.0;
+    for (uint32_t i = 0u; i < nframes; i++) {
+        int32_t ql = q23_low[2u * i];
+        int32_t aq = (ql < 0) ? -ql : ql;
+        if (aq > sub_q23_peak) sub_q23_peak = aq;
+        sub_q23_sum += (double)ql / 256.0;
+    }
+
+    memset(pcm_256, 0, nframes * 2u * sizeof(int16_t));
+    adrift_app_audio_block(pcm_256, nframes, 0, 0u);
+    uint32_t dither_toggles = 0u;
+    uint32_t mono_mismatch  = 0u;
+    int64_t  dither_sum     = 0;
+    for (uint32_t i = 0u; i < nframes; i++) {
+        int16_t l = pcm_256[2u * i];
+        int16_t r = pcm_256[2u * i + 1u];
+        if (l != 0) dither_toggles++;
+        if (l != r) mono_mismatch++;
+        dither_sum += l;
+    }
+    double dither_dc = fabs(((double)dither_sum - sub_q23_sum) / (double)nframes);
+    CHECK(sub_q23_peak > 0 && sub_q23_peak < 120 && dither_toggles > 50u &&
+          mono_mismatch == 0u && dither_dc < 0.05,
+          "Expected sub-LSB TPDF dither to resolve signal with L==R mono coherence and zero DC bias (q23_pk=%d, toggles=%u, mismatch=%u, dc=%.4f)",
+          (int)sub_q23_peak, dither_toggles, mono_mismatch, dither_dc);
+
+    s->groups[0].pan = -512; /* Hard Left -> Right Q23 channel is exact 0 -> zero-gated dither keeps R == 0 */
+    adrift_app_audio_block(pcm_256, 256u, 0, 0u); /* Settle pan ramp */
+    adrift_app_audio_block(pcm_256, 512u, 0, 0u);
+    int32_t hard_l_right_peak = 0;
+    for (uint32_t i = 0u; i < 512u; i++) {
+        int32_t r = (pcm_256[2u * i + 1u] < 0) ? -(int32_t)pcm_256[2u * i + 1u] : (int32_t)pcm_256[2u * i + 1u];
+        if (r > hard_l_right_peak) hard_l_right_peak = r;
+    }
+    CHECK(hard_l_right_peak == 0,
+          "Expected per-channel zero-gated TPDF dither to keep muted hard-panned R channel at exact 0 LSB (peak=%d)",
+          (int)hard_l_right_peak);
+
+    /* 5d. Q23 headphone speech mixer: bit-exact passthrough when idle, scaled speech when active */
+    adrift_app_init();
+    for (uint32_t i = 0u; i < 128u; i++) {
+        q23_low[i] = (i & 1u) ? -37 : 37;
+        q23_ref[i] = q23_low[i];
+    }
+    adrift_app_mix_line_out_q23(q23_low, 64u);
+    CHECK(memcmp(q23_low, q23_ref, 128u * sizeof(int32_t)) == 0,
+          "Expected idle adrift_app_mix_line_out_q23 to preserve sub-16-bit Q23 synth audio bit-for-bit");
+
+    adrift_app_init();
+    s  = adrift_app_get_synth();
+    ui = adrift_app_get_ui();
+    sr = adrift_app_get_screen_reader();
+    adrift_synth_set_master_pot(s, 1023, true);
+    adrift_sr_set_enabled(sr, true, true, ui, s);
+    memset(q23_ref, 0, nframes * 2u * sizeof(int32_t));
+    adrift_app_mix_line_out_q23(q23_ref, nframes);
+
+    adrift_app_init();
+    s  = adrift_app_get_synth();
+    ui = adrift_app_get_ui();
+    sr = adrift_app_get_screen_reader();
+    adrift_synth_set_master_pot(s, 512, true);
+    adrift_sr_set_enabled(sr, true, true, ui, s);
+    memset(q23_low, 0, nframes * 2u * sizeof(int32_t));
+    adrift_app_mix_line_out_q23(q23_low, nframes);
+
+    double q23_sp_1023 = 0.0, q23_sp_512 = 0.0;
+    for (uint32_t i = 0u; i < nframes * 2u; i++) {
+        double a = (double)q23_ref[i];
+        double b = (double)q23_low[i];
+        q23_sp_1023 += a * a;
+        q23_sp_512  += b * b;
+    }
+    double q23_sp_diff_db = 10.0 * log10((q23_sp_512 + 1e-12) / (q23_sp_1023 + 1e-12));
+    CHECK(q23_sp_1023 > 1e12 && fabs(q23_sp_diff_db - (-6.012)) < 0.25,
+          "Expected Q23 speech mix at pot=512 to be -6.0 dB vs pot=1023 (diff=%.2f dB)",
+          q23_sp_diff_db);
+
+    free(q23_0);
+    free(q23_low);
+    free(q23_ref);
     free(fb);
     free(pcm_0);
     free(pcm_256);
     free(pcm_512);
     free(pcm_1023);
-    printf("  -> PASS (pot=0 Exact 0 LSB, Block-0 512=-6.0dB / 256=-12.0dB, Low-Pot 0..4 Snap & Speech Scaling)\n");
+    printf("  -> PASS (pot=0 Exact 0 LSB, 512=-6.0dB, Q23 SNR=+%.1f dB, Zero-Gated TPDF & Speech Scaling)\n",
+           snr_q23_db - snr_s16_db);
 }

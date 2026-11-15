@@ -133,7 +133,7 @@ void adrift_sr_tick(adrift_screen_reader_t *sr,
                     const adrift_synth_t *s,
                     uint32_t dt_ms);
 
-/* Mix synthesized speech into stereo 44,118 Hz 16-bit line-out/headphone buffer ONLY. */
+/* Mix synthesized speech into stereo 44,118 Hz 16-bit or 24-bit Q23 line-out/headphone buffer ONLY. */
 void adrift_sr_mix_line_out(adrift_screen_reader_t *sr,
                             int16_t *stereo_inout,
                             uint32_t frames);
@@ -141,6 +141,13 @@ void adrift_sr_mix_line_out_scaled(adrift_screen_reader_t *sr,
                                    int16_t *stereo_inout,
                                    uint32_t frames,
                                    int32_t master_gain_q15);
+void adrift_sr_mix_line_out_q23(adrift_screen_reader_t *sr,
+                                int32_t *stereo_q23_inout,
+                                uint32_t frames);
+void adrift_sr_mix_line_out_scaled_q23(adrift_screen_reader_t *sr,
+                                       int32_t *stereo_q23_inout,
+                                       uint32_t frames,
+                                       int32_t master_gain_q15);
 
 /* Process a 27-key panel event (key_idx 0..26) before note mapping.
  * Returns true if the event was consumed as a screen-reader chord (suppress Note-On).

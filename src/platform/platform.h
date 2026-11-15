@@ -100,6 +100,10 @@ void adrift_app_audio_block(int16_t *stereo_out_interleaved,
                             uint32_t frames,
                             const adrift_midi_msg_t *midi_events,
                             uint32_t num_midi);
+void adrift_app_audio_block_q23(int32_t *stereo_q23_out_interleaved,
+                                uint32_t frames,
+                                const adrift_midi_msg_t *midi_events,
+                                uint32_t num_midi);
 void adrift_app_tick_ui(const adrift_input_state_t *input,
                         uint16_t *rgb565_fb,
                         adrift_dirty_t *dirty);
